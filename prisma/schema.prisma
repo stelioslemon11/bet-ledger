@@ -1,0 +1,50 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  password  String
+  name      String
+  role      Role     @default(PLAYER)
+  balance   Float    @default(0)
+  createdById String?
+  createdBy User?    @relation("UserHierarchy", fields: [createdById], references: [id])
+  children  User[]   @relation("UserHierarchy")
+  bets      Bet[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum Role {
+  ADMIN
+  SUBADMIN
+  PLAYER
+}
+
+model Bet {
+  id              String    @id @default(cuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  match           String
+  betType         String
+  amount          Float
+  odds            Float
+  potentialReturn Float
+  status          BetStatus @default(PENDING)
+  notes           String?
+  createdAt       DateTime  @default(now())
+  settledAt       DateTime?
+}
+
+enum BetStatus {
+  PENDING
+  WON
+  LOST
+}
