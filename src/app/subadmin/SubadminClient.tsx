@@ -13,11 +13,46 @@ type Parlay = {
 }
 type Player = { id: string; username: string; name: string; balance: number; bets: Bet[]; parlays: Parlay[] }
 type Session = { userId: string; username: string; role: string; name: string }
-type Match = { id: number; league: string; country: string; home: string; away: string; date: string; time: string; status: string }
+type Match = { id: number; league: string; country: string; home: string; away: string; date: string; time: string; status: string; elapsed?: number; homeScore?: number; awayScore?: number; isLive: boolean }
 type ParlayLeg = { match: string; betType: string; odds: string; fixtureId: number | null }
 type PlayerBet = Bet & { playerName: string; playerId: string; playerUsername: string; parlayTotalLegs?: number; parlayInitialStake?: number; parlayTotalOdds?: number; parlayPotential?: number }
 
-const BET_TYPES = ['Over 2.5','Under 2.5','GG','NG','Over 1.5','Over 3.5','Over 4.5','1X2 - Home','1X2 - Draw','1X2 - Away','Double Chance 1X','Double Chance X2','Double Chance 12','BTTS','Asian Handicap','Other']
+const BET_TYPES = [
+  // Goals total lines
+  'Over 0.5','Under 0.5',
+  'Over 1.5','Under 1.5',
+  'Over 2.5','Under 2.5',
+  'Over 3.5','Under 3.5',
+  'Over 4.5','Under 4.5',
+  'Over 5.5','Under 5.5',
+  // Match result
+  '1X2 - Home','1X2 - Draw','1X2 - Away',
+  // Double Chance
+  'Double Chance 1X','Double Chance X2','Double Chance 12',
+  // Both teams to score
+  'GG','NG',
+  // Half-time
+  'HT Over 0.5','HT Over 1.5','HT Under 0.5','HT Under 1.5',
+  'HT - Home','HT - Draw','HT - Away',
+  // Other
+  'Asian Handicap','Both Halves Over 0.5','Clean Sheet Home','Clean Sheet Away','Other',
+]
+
+function getBetLine(betType: string): string {
+  const bt = betType.toLowerCase()
+  if (/over|under/.test(bt) && /0\.5/.test(bt) && !/ht/.test(bt)) return '⚽ Goals 0.5'
+  if (/over|under/.test(bt) && /1\.5/.test(bt) && !/ht/.test(bt)) return '⚽ Goals 1.5'
+  if (/over|under/.test(bt) && /2\.5/.test(bt)) return '⚽ Goals 2.5'
+  if (/over|under/.test(bt) && /3\.5/.test(bt)) return '⚽ Goals 3.5'
+  if (/over|under/.test(bt) && /4\.5/.test(bt)) return '⚽ Goals 4.5'
+  if (/over|under/.test(bt) && /5\.5/.test(bt)) return '⚽ Goals 5.5'
+  if (bt === 'gg' || bt === 'ng' || /btts/.test(bt)) return '🎯 Both Teams Score'
+  if (/1x2|home|away|draw/.test(bt) && !/ht/.test(bt) && !/clean/.test(bt)) return '🏆 Match Result'
+  if (/double chance/.test(bt)) return '🔄 Double Chance'
+  if (/ht/.test(bt)) return '⏱ Half Time'
+  if (/asian|handicap/.test(bt)) return '📊 Asian Handicap'
+  return '📋 Other'
+}
 
 function avatar(name: string) {
   return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
@@ -126,7 +161,10 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
       const res = await fetch('/api/matches')
       const data = await res.json()
       if (!res.ok || data.error) { setMatchError(data.error || 'Failed'); return }
-      setMatches(data.matches || [])
+      // Merge live + upcoming, live first
+      const live = (data.live || []) as Match[]
+      const upcoming = (data.matches || []) as Match[]
+      setMatches([...live, ...upcoming])
     } catch { setMatchError('Network error') }
     finally { setMatchLoading(false) }
   }, [])
@@ -140,7 +178,12 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
   function getToday() { return new Date().toISOString().split('T')[0] }
   function getTomorrow() { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().split('T')[0] }
 
-  const filteredMatches = matches.filter(m => {
+  const liveMatches = matches.filter(m => m.isLive).filter(m => {
+    const q = matchSearch.toLowerCase()
+    return !q || m.home.toLowerCase().includes(q) || m.away.toLowerCase().includes(q) || m.league.toLowerCase().includes(q)
+  })
+
+  const filteredMatches = matches.filter(m => !m.isLive).filter(m => {
     const dateOk = selectedDate === 'today' ? m.date === getToday() : m.date === getTomorrow()
     const q = matchSearch.toLowerCase()
     return dateOk && (!q || m.home.toLowerCase().includes(q) || m.away.toLowerCase().includes(q) || m.league.toLowerCase().includes(q))
@@ -402,57 +445,79 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
                   </div>
                 </div>
                 <div style={{ background: 'var(--surface)' }}>
-                  {bets.map((bet, idx) => (
-                    <div key={bet.id} className="flex items-center gap-3 px-5 py-3" style={{ borderTop: idx > 0 ? '1px solid var(--surface2)' : undefined }}>
-                      {/* Player avatar */}
-                      <div className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold text-white" style={{ background: 'var(--accent)' }}>
-                        {avatar(bet.playerName)}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-medium text-white text-sm">{bet.playerName}</span>
-                          {/* Parlay badge */}
-                          {bet.parlayId && (
-                            <span className="text-xs px-2 py-0.5 rounded-full font-semibold flex items-center gap-1" style={{ background: '#f59e0b20', color: '#f59e0b' }}>
-                              🔗 Parlay leg {bet.parlayOrder}/{bet.parlayTotalLegs}
-                            </span>
-                          )}
-                          <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: 'var(--surface2)', color: '#6366f1' }}>
-                            {bet.betType}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                          {bet.parlayId ? (
-                            <span className="text-xs" style={{ color: 'var(--muted)' }}>
-                              {bet.parlayOrder === 1 ? `Initial €${bet.parlayInitialStake?.toFixed(0)}` : `Running €${bet.amount.toFixed(0)}`}
-                              {' '}@{bet.odds}x → <span style={{ color: '#22c55e' }}>€{bet.potentialReturn.toFixed(0)}</span>
-                              {' '}· Total parlay: €{bet.parlayInitialStake?.toFixed(0)} @ {bet.parlayTotalOdds?.toFixed(2)}x = <span style={{ color: '#22c55e' }}>€{bet.parlayPotential?.toFixed(0)}</span>
-                            </span>
-                          ) : (
-                            <span className="text-xs" style={{ color: 'var(--muted)' }}>
-                              €{bet.amount.toFixed(0)} @{bet.odds}x → <span style={{ color: '#22c55e' }}>€{bet.potentialReturn.toFixed(0)}</span>
-                            </span>
-                          )}
-                          {bet.notes && <span className="text-xs" style={{ color: 'var(--muted)' }}>· {bet.notes}</span>}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        {statusBadge(bet.status)}
-                        {bet.status === 'PENDING' && (
-                          <>
-                            <button onClick={() => settleBetAction(bet.id, 'WON')} className="text-xs px-2 py-1 rounded-lg font-medium" style={{ background: '#22c55e20', color: '#22c55e' }}>Won</button>
-                            <button onClick={() => settleBetAction(bet.id, 'LOST')} className="text-xs px-2 py-1 rounded-lg font-medium" style={{ background: '#ef444420', color: '#ef4444' }}>Lost</button>
-                          </>
+                  {(() => {
+                    // Group bets within this match by their bet line
+                    const byLine: Record<string, PlayerBet[]> = {}
+                    bets.forEach(b => {
+                      const line = getBetLine(b.betType)
+                      if (!byLine[line]) byLine[line] = []
+                      byLine[line].push(b)
+                    })
+                    const lines = Object.entries(byLine)
+                    const multiLine = lines.length > 1
+                    return lines.map(([line, lineBets], lineIdx) => (
+                      <div key={line}>
+                        {/* Bet-line sub-header (only when multiple lines for this match) */}
+                        {multiLine && (
+                          <div className="flex items-center gap-2 px-5 py-1.5" style={{ background: '#0f172a', borderTop: '1px solid var(--surface2)' }}>
+                            <span className="text-xs font-semibold" style={{ color: '#94a3b8' }}>{line}</span>
+                            <span className="text-xs" style={{ color: '#475569' }}>· {lineBets.length} bet{lineBets.length !== 1 ? 's' : ''}</span>
+                          </div>
                         )}
-                        {!bet.parlayId && (
-                          <button onClick={() => deleteBet(bet.id)} className="text-xs px-2 py-1 rounded-lg" style={{ background: '#ef444410', color: '#ef4444' }}>🗑</button>
-                        )}
-                        {bet.parlayId && bet.parlayOrder === 1 && (
-                          <button onClick={() => deleteParlay(bet.parlayId!)} className="text-xs px-2 py-1 rounded-lg" style={{ background: '#ef444410', color: '#ef4444' }} title="Delete entire parlay">🗑 Parlay</button>
-                        )}
+                        {lineBets.map((bet, idx) => (
+                          <div key={bet.id} className="flex items-center gap-3 px-5 py-3" style={{ borderTop: idx > 0 || multiLine ? '1px solid var(--surface2)' : undefined }}>
+                            {/* Player avatar */}
+                            <div className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold text-white" style={{ background: 'var(--accent)' }}>
+                              {avatar(bet.playerName)}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-medium text-white text-sm">{bet.playerName}</span>
+                                {/* Parlay badge */}
+                                {bet.parlayId && (
+                                  <span className="text-xs px-2 py-0.5 rounded-full font-semibold flex items-center gap-1" style={{ background: '#f59e0b20', color: '#f59e0b' }}>
+                                    🔗 Parlay leg {bet.parlayOrder}/{bet.parlayTotalLegs}
+                                  </span>
+                                )}
+                                <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: 'var(--surface2)', color: '#6366f1' }}>
+                                  {bet.betType}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                {bet.parlayId ? (
+                                  <span className="text-xs" style={{ color: 'var(--muted)' }}>
+                                    {bet.parlayOrder === 1 ? `Initial €${bet.parlayInitialStake?.toFixed(0)}` : `Running €${bet.amount.toFixed(0)}`}
+                                    {' '}@{bet.odds}x → <span style={{ color: '#22c55e' }}>€{bet.potentialReturn.toFixed(0)}</span>
+                                    {' '}· Total: €{bet.parlayInitialStake?.toFixed(0)} @ {bet.parlayTotalOdds?.toFixed(2)}x = <span style={{ color: '#22c55e' }}>€{bet.parlayPotential?.toFixed(0)}</span>
+                                  </span>
+                                ) : (
+                                  <span className="text-xs" style={{ color: 'var(--muted)' }}>
+                                    €{bet.amount.toFixed(0)} @{bet.odds}x → <span style={{ color: '#22c55e' }}>€{bet.potentialReturn.toFixed(0)}</span>
+                                  </span>
+                                )}
+                                {bet.notes && <span className="text-xs" style={{ color: 'var(--muted)' }}>· {bet.notes}</span>}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              {statusBadge(bet.status)}
+                              {bet.status === 'PENDING' && (
+                                <>
+                                  <button onClick={() => settleBetAction(bet.id, 'WON')} className="text-xs px-2 py-1 rounded-lg font-medium" style={{ background: '#22c55e20', color: '#22c55e' }}>Won</button>
+                                  <button onClick={() => settleBetAction(bet.id, 'LOST')} className="text-xs px-2 py-1 rounded-lg font-medium" style={{ background: '#ef444420', color: '#ef4444' }}>Lost</button>
+                                </>
+                              )}
+                              {!bet.parlayId && (
+                                <button onClick={() => deleteBet(bet.id)} className="text-xs px-2 py-1 rounded-lg" style={{ background: '#ef444410', color: '#ef4444' }}>🗑</button>
+                              )}
+                              {bet.parlayId && bet.parlayOrder === 1 && (
+                                <button onClick={() => deleteParlay(bet.parlayId!)} className="text-xs px-2 py-1 rounded-lg" style={{ background: '#ef444410', color: '#ef4444' }} title="Delete entire parlay">🗑 Parlay</button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    </div>
-                  ))}
+                    ))
+                  })()}
                 </div>
               </div>
             )
@@ -541,6 +606,33 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
             <div className="overflow-y-auto flex-1 px-5 py-3">
               {matchLoading && <p className="text-center py-8" style={{ color: 'var(--muted)' }}>Loading matches…</p>}
               {matchError && <p className="text-center py-8 text-red-400">{matchError}</p>}
+              {/* LIVE section */}
+              {!matchLoading && liveMatches.length > 0 && (
+                <div className="mb-5">
+                  <div className="flex items-center gap-2 mb-2 px-1">
+                    <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse inline-block"/>
+                    <p className="text-xs font-bold text-red-400 uppercase tracking-wider">Live Now ({liveMatches.length})</p>
+                  </div>
+                  {liveMatches.map(m => (
+                    <button key={m.id} onClick={() => selectMatch(m)} className="w-full text-left rounded-lg px-4 py-3 mb-1 flex items-center justify-between hover:opacity-90 transition-opacity"
+                      style={{ background: '#ef444415', border: '1px solid #ef444430' }}>
+                      <div>
+                        <span className="text-white text-sm font-medium">{m.home} vs {m.away}</span>
+                        <span className="text-xs ml-2" style={{ color: 'var(--muted)' }}>{m.league}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {m.homeScore !== undefined && (
+                          <span className="font-bold text-white px-2 py-0.5 rounded" style={{ background: '#ef444430' }}>
+                            {m.homeScore} - {m.awayScore}
+                          </span>
+                        )}
+                        <span className="text-xs text-red-400">{m.elapsed}&apos;</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {/* Upcoming section */}
               {!matchLoading && !matchError && Object.entries(grouped).map(([league, ms]) => (
                 <div key={league} className="mb-4">
                   <p className="text-xs font-semibold mb-2 px-1" style={{ color: 'var(--muted)' }}>{league}</p>
@@ -553,7 +645,7 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
                   ))}
                 </div>
               ))}
-              {!matchLoading && !matchError && Object.keys(grouped).length === 0 && (
+              {!matchLoading && !matchError && Object.keys(grouped).length === 0 && liveMatches.length === 0 && (
                 <p className="text-center py-8" style={{ color: 'var(--muted)' }}>No matches found</p>
               )}
             </div>
