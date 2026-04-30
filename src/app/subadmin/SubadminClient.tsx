@@ -103,6 +103,13 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
   const [selectedDate, setSelectedDate] = useState<'today' | 'tomorrow'>('today')
   const [selectedSport, setSelectedSport] = useState<'football' | 'basketball'>('football')
 
+  // Edit bet modal
+  const [showEditBet, setShowEditBet] = useState(false)
+  const [editBet, setEditBet] = useState<PlayerBet | null>(null)
+  const [editForm, setEditForm] = useState({ match: '', betType: 'Over 2.5', amount: '', odds: '', notes: '', fixtureId: null as number | null, fixtureDate: null as string | null })
+  const [settleLog, setSettleLog] = useState<string[]>([])
+  const [settleRunning, setSettleRunning] = useState(false)
+
   // Balance adjustment modal
   const [showBalanceModal, setShowBalanceModal] = useState(false)
   const [balanceTarget, setBalanceTarget] = useState<{ id: string; name: string; balance: number } | null>(null)
@@ -318,6 +325,43 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
     finally { setLoading(false) }
   }
 
+  async function editBetAction() {
+    if (!editBet) return
+    setLoading(true); setError('')
+    try {
+      const res = await fetch(`/api/bets/${editBet.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          match: editForm.match, betType: editForm.betType,
+          amount: Number(editForm.amount), odds: Number(editForm.odds),
+          notes: editForm.notes, fixtureId: editForm.fixtureId, fixtureDate: editForm.fixtureDate
+        })
+      })
+      if (!res.ok) { const d = await res.json(); setError(d.error); return }
+      setShowEditBet(false); setEditBet(null)
+      window.location.reload()
+    } catch { setError('Network error') }
+    finally { setLoading(false) }
+  }
+
+  function openEditBet(bet: PlayerBet) {
+    setEditBet(bet)
+    setEditForm({ match: bet.match, betType: bet.betType, amount: String(bet.amount), odds: String(bet.odds), notes: bet.notes || '', fixtureId: bet.fixtureId || null, fixtureDate: bet.fixtureDate || null })
+    setShowEditBet(true)
+  }
+
+  async function manualSettle() {
+    setSettleRunning(true); setSettleLog([])
+    try {
+      const res = await fetch('/api/settle', { method: 'POST' })
+      const data = await res.json()
+      setSettleLog([data.message, ...(data.results || [])])
+      if (data.settled > 0) setTimeout(() => window.location.reload(), 2000)
+    } catch { setSettleLog(['Network error']) }
+    finally { setSettleRunning(false) }
+  }
+
   async function settleBetAction(betId: string, status: 'WON' | 'LOST') {
     await fetch(`/api/bets/${betId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) })
     window.location.reload()
@@ -476,10 +520,24 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
                 👤 By Player
               </button>
             </div>
-            <div className="text-xs ml-auto" style={{ color: 'var(--muted)' }}>
-              {filteredBets.length} bet{filteredBets.length !== 1 ? 's' : ''} · Stake €{filteredBets.filter(b=>!b.parlayId||b.parlayOrder===1).reduce((s,b)=>s+b.amount,0).toFixed(0)} · Potential €{filteredBets.filter(b=>!b.parlayId||b.parlayOrder===1).reduce((s,b)=>s+(b.parlayId?(b.parlayPotential||0):b.potentialReturn),0).toFixed(0)}
+            <div className="flex items-center gap-3 ml-auto">
+              <div className="text-xs" style={{ color: 'var(--muted)' }}>
+                {filteredBets.length} bet{filteredBets.length !== 1 ? 's' : ''} · Stake €{filteredBets.filter(b=>!b.parlayId||b.parlayOrder===1).reduce((s,b)=>s+b.amount,0).toFixed(0)} · Potential €{filteredBets.filter(b=>!b.parlayId||b.parlayOrder===1).reduce((s,b)=>s+(b.parlayId?(b.parlayPotential||0):b.potentialReturn),0).toFixed(0)}
+              </div>
+              <button onClick={manualSettle} disabled={settleRunning}
+                className="text-xs px-3 py-1.5 rounded-lg font-medium disabled:opacity-50 transition-opacity"
+                style={{ background: '#0ea5e920', color: '#38bdf8', border: '1px solid #0ea5e940' }}>
+                {settleRunning ? '⏳ Settling…' : '🔄 Settle Now'}
+              </button>
             </div>
           </div>
+          {settleLog.length > 0 && (
+            <div className="mx-0 mb-4 rounded-xl p-4 text-xs space-y-1" style={{ background: '#0f172a', border: '1px solid #1e3a5f' }}>
+              {settleLog.map((line, i) => (
+                <div key={i} style={{ color: i === 0 ? '#38bdf8' : line.includes('WON') ? '#22c55e' : line.includes('LOST') ? '#ef4444' : '#94a3b8' }}>{line}</div>
+              ))}
+            </div>
+          )}
 
           {filteredBets.length === 0 && (
             <div className="text-center py-16" style={{ color: 'var(--muted)' }}>
@@ -579,6 +637,7 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
                                   <button onClick={() => settleBetAction(bet.id, 'LOST')} className="text-xs px-2 py-1 rounded-lg font-medium" style={{ background: '#ef444420', color: '#ef4444' }}>Lost</button>
                                 </>
                               )}
+                              <button onClick={() => openEditBet(bet)} className="text-xs px-2 py-1 rounded-lg" style={{ background: '#6366f120', color: '#818cf8' }} title="Edit bet">✏️</button>
                               {!bet.parlayId && (
                                 <button onClick={() => deleteBet(bet.id)} className="text-xs px-2 py-1 rounded-lg" style={{ background: '#ef444410', color: '#ef4444' }}>🗑</button>
                               )}
@@ -644,6 +703,7 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
                             <button onClick={() => settleBetAction(bet.id, 'LOST')} className="text-xs px-2 py-1 rounded-lg" style={{ background: '#ef444420', color: '#ef4444' }}>Lost</button>
                           </>
                         )}
+                        <button onClick={() => openEditBet(bet)} className="text-xs px-2 py-1 rounded-lg" style={{ background: '#6366f120', color: '#818cf8' }} title="Edit bet">✏️</button>
                         {!bet.parlayId && <button onClick={() => deleteBet(bet.id)} className="text-xs px-2 py-1 rounded-lg" style={{ background: '#ef444410', color: '#ef4444' }}>🗑</button>}
                       </div>
                     </div>
@@ -890,6 +950,81 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
                 className="flex-1 py-2.5 rounded-xl font-medium text-white disabled:opacity-50"
                 style={{ background: betMode === 'parlay' ? '#f59e0b' : 'var(--accent)' }}>
                 {loading ? 'Saving…' : betMode === 'parlay' ? `Create Parlay (${parlayLegs.length} legs)` : 'Create Bet'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── EDIT BET MODAL ── */}
+      {showEditBet && editBet && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)' }}>
+          <div className="w-full max-w-md rounded-2xl overflow-hidden" style={{ background: 'var(--surface)', border: '1px solid var(--surface2)' }}>
+            <div className="px-6 pt-6 pb-4">
+              <h2 className="text-lg font-bold text-white mb-1">Edit Bet</h2>
+              <p className="text-sm mb-5" style={{ color: 'var(--muted)' }}>
+                {editBet.match} · <span style={{ color: '#6366f1' }}>{editBet.betType}</span>
+              </p>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--muted)' }}>Match</label>
+                  <input type="text" value={editForm.match}
+                    onChange={e => setEditForm(f => ({ ...f, match: e.target.value }))}
+                    className="w-full px-4 py-2.5 rounded-lg text-white outline-none"
+                    style={{ background: 'var(--surface2)', border: '1px solid #334155' }} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--muted)' }}>Bet Type</label>
+                  <select value={editForm.betType} onChange={e => setEditForm(f => ({ ...f, betType: e.target.value }))}
+                    className="w-full px-4 py-2.5 rounded-lg text-white outline-none"
+                    style={{ background: 'var(--surface2)', border: '1px solid #334155' }}>
+                    {['1','X','2','1X','X2','12','Over 0.5','Under 0.5','Over 1.5','Under 1.5','Over 2.5','Under 2.5','Over 3.5','Under 3.5','Over 4.5','Under 4.5','Over 5.5','Under 5.5','HT Over 0.5','HT Under 0.5','HT Over 1.5','HT Under 1.5','BTTS Yes','BTTS No','Clean Sheet','Correct Score'].map(t => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--muted)' }}>Amount (€)</label>
+                    <input type="number" min="0" step="0.01" value={editForm.amount}
+                      onChange={e => setEditForm(f => ({ ...f, amount: e.target.value }))}
+                      className="w-full px-4 py-2.5 rounded-lg text-white outline-none"
+                      style={{ background: 'var(--surface2)', border: '1px solid #334155' }} />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--muted)' }}>Odds</label>
+                    <input type="number" min="1" step="0.01" value={editForm.odds}
+                      onChange={e => setEditForm(f => ({ ...f, odds: e.target.value }))}
+                      className="w-full px-4 py-2.5 rounded-lg text-white outline-none"
+                      style={{ background: 'var(--surface2)', border: '1px solid #334155' }} />
+                  </div>
+                </div>
+                {editForm.amount && editForm.odds && !isNaN(Number(editForm.amount)) && !isNaN(Number(editForm.odds)) && (
+                  <div className="px-4 py-2.5 rounded-lg text-sm" style={{ background: 'var(--surface2)' }}>
+                    Potential return: <span className="font-bold" style={{ color: '#22c55e' }}>
+                      €{(Number(editForm.amount) * Number(editForm.odds)).toFixed(2)}
+                    </span>
+                  </div>
+                )}
+                <div>
+                  <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--muted)' }}>Notes</label>
+                  <input type="text" placeholder="Optional notes…" value={editForm.notes}
+                    onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))}
+                    className="w-full px-4 py-2.5 rounded-lg text-white outline-none"
+                    style={{ background: 'var(--surface2)', border: '1px solid #334155' }} />
+                </div>
+                {error && <p className="text-sm" style={{ color: '#ef4444' }}>{error}</p>}
+              </div>
+            </div>
+            <div className="px-6 py-4 flex gap-3" style={{ borderTop: '1px solid var(--surface2)' }}>
+              <button onClick={() => { setShowEditBet(false); setEditBet(null); setError('') }}
+                className="flex-1 py-2.5 rounded-xl font-medium" style={{ background: 'var(--surface2)', color: 'var(--muted)' }}>
+                Cancel
+              </button>
+              <button onClick={editBetAction} disabled={loading}
+                className="flex-1 py-2.5 rounded-xl font-medium text-white disabled:opacity-50"
+                style={{ background: '#6366f1' }}>
+                {loading ? 'Saving…' : 'Save Changes'}
               </button>
             </div>
           </div>

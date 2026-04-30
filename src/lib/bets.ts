@@ -5,14 +5,18 @@ export function evaluateBetResult(betType: string, homeGoals: number, awayGoals:
   const total = homeGoals + awayGoals
   const bt = betType.toLowerCase().trim()
 
+  if (/over\s*0\.5/.test(bt) && !/ht/.test(bt)) return total > 0.5
+  if (/under\s*0\.5/.test(bt) && !/ht/.test(bt)) return total < 0.5
+  if (/over\s*1\.5/.test(bt) && !/ht/.test(bt)) return total > 1.5
+  if (/under\s*1\.5/.test(bt) && !/ht/.test(bt)) return total < 1.5
   if (/over\s*2\.5/.test(bt)) return total > 2.5
   if (/under\s*2\.5/.test(bt)) return total < 2.5
-  if (/over\s*1\.5/.test(bt)) return total > 1.5
-  if (/under\s*1\.5/.test(bt)) return total < 1.5
   if (/over\s*3\.5/.test(bt)) return total > 3.5
   if (/under\s*3\.5/.test(bt)) return total < 3.5
   if (/over\s*4\.5/.test(bt)) return total > 4.5
   if (/under\s*4\.5/.test(bt)) return total < 4.5
+  if (/over\s*5\.5/.test(bt)) return total > 5.5
+  if (/under\s*5\.5/.test(bt)) return total < 5.5
   if (bt === 'gg' || bt === 'btts' || /both.?teams/.test(bt)) return homeGoals > 0 && awayGoals > 0
   if (bt === 'ng' || /no.?goal/.test(bt)) return !(homeGoals > 0 && awayGoals > 0)
   if (/1x2.*home|home.*win/.test(bt)) return homeGoals > awayGoals

@@ -5,71 +5,74 @@ import { evaluateBetResult, settleBet } from '@/lib/bets'
 const API_KEY = process.env.FOOTBALL_API_KEY || ''
 const BASE_URL = 'https://v3.football.api-sports.io'
 
-let settleCache: { ts: number } | null = null
-const SETTLE_TTL = 15 * 60 * 1000
+async function runSettle() {
+  if (!API_KEY) return { message: 'No API key configured', settled: 0 }
 
-export async function POST() {
-  if (settleCache && Date.now() - settleCache.ts < SETTLE_TTL) {
-    return NextResponse.json({ message: 'Skipped (too soon)' })
+  const pendingBets = await prisma.bet.findMany({
+    where: { status: 'PENDING', fixtureId: { not: null } },
+  })
+
+  if (pendingBets.length === 0) {
+    return { message: 'No pending bets with fixture IDs to check', settled: 0 }
   }
 
-  if (!API_KEY) return NextResponse.json({ message: 'No API key configured' })
+  const fixtureIds = Array.from(new Set(pendingBets.map(b => b.fixtureId).filter(Boolean) as number[]))
+  const idsParam = fixtureIds.join('-')
 
-  try {
-    const pendingBets = await prisma.bet.findMany({
-      where: { status: 'PENDING', fixtureId: { not: null } },
-    })
+  const res = await fetch(`${BASE_URL}/fixtures?ids=${idsParam}`, {
+    headers: { 'x-apisports-key': API_KEY, 'x-rapidapi-host': 'v3.football.api-sports.io' },
+    next: { revalidate: 0 },
+  })
 
-    if (pendingBets.length === 0) {
-      settleCache = { ts: Date.now() }
-      return NextResponse.json({ message: 'No pending bets with fixture IDs' })
-    }
+  if (!res.ok) return { error: `API error ${res.status}`, settled: 0 }
 
-    const fixtureIds = Array.from(new Set(pendingBets.map(b => b.fixtureId).filter(Boolean) as number[]))
-    const idsParam = fixtureIds.join('-')
+  const json = await res.json()
+  const fixtures = json.response || []
+  const finishedStatuses = ['FT', 'AET', 'PEN', 'AWD']
+  const finished = fixtures.filter((f: any) => finishedStatuses.includes(f.fixture.status.short))
 
-    const res = await fetch(`${BASE_URL}/fixtures?ids=${idsParam}`, {
-      headers: {
-        'x-apisports-key': API_KEY,
-        'x-rapidapi-host': 'v3.football.api-sports.io',
-      },
-      next: { revalidate: 0 },
-    })
+  let settled = 0
+  const results: string[] = []
 
-    if (!res.ok) return NextResponse.json({ error: `API error ${res.status}` }, { status: 500 })
+  for (const fixture of finished) {
+    const fixtureId = fixture.fixture.id
+    const homeGoals: number = fixture.goals.home ?? 0
+    const awayGoals: number = fixture.goals.away ?? 0
+    const matchName = `${fixture.teams.home.name} vs ${fixture.teams.away.name} (${homeGoals}-${awayGoals})`
 
-    const json = await res.json()
-    const fixtures = json.response || []
-
-    const finishedStatuses = ['FT', 'AET', 'PEN', 'AWD']
-    const finished = fixtures.filter((f: any) => finishedStatuses.includes(f.fixture.status.short))
-
-    let settled = 0
-    for (const fixture of finished) {
-      const fixtureId = fixture.fixture.id
-      const homeGoals: number = fixture.goals.home ?? 0
-      const awayGoals: number = fixture.goals.away ?? 0
-
-      const toSettle = pendingBets.filter(b => b.fixtureId === fixtureId)
-      for (const bet of toSettle) {
-        const won = evaluateBetResult(bet.betType, homeGoals, awayGoals)
-        if (won === null) continue
-        await settleBet(bet.id, won ? 'WON' : 'LOST')
-        settled++
+    const toSettle = pendingBets.filter(b => b.fixtureId === fixtureId)
+    for (const bet of toSettle) {
+      const won = evaluateBetResult(bet.betType, homeGoals, awayGoals)
+      if (won === null) {
+        results.push(`SKIP: ${matchName} — ${bet.betType} (unsupported)`)
+        continue
       }
+      await settleBet(bet.id, won ? 'WON' : 'LOST')
+      results.push(`${won ? '✅ WON' : '❌ LOST'}: ${matchName} — ${bet.betType}`)
+      settled++
     }
+  }
 
-    settleCache = { ts: Date.now() }
-    return NextResponse.json({
-      message: `Checked ${finished.length} finished fixtures, settled ${settled} bets`,
-    })
+  return {
+    message: `Checked ${fixtureIds.length} fixtures, ${finished.length} finished → settled ${settled} bets`,
+    settled,
+    results,
+    pendingWithFixture: pendingBets.length,
+  }
+}
+
+export async function POST() {
+  try {
+    return NextResponse.json(await runSettle())
   } catch (error) {
-    console.error(error)
     return NextResponse.json({ error: String(error) }, { status: 500 })
   }
 }
 
-// Also allow GET for easy manual trigger
 export async function GET() {
-  return POST()
+  try {
+    return NextResponse.json(await runSettle())
+  } catch (error) {
+    return NextResponse.json({ error: String(error) }, { status: 500 })
+  }
 }
