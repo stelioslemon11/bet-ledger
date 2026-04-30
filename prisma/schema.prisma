@@ -8,24 +8,38 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  username  String   @unique
-  password  String
-  name      String
-  role      Role     @default(PLAYER)
-  balance   Float    @default(0)
+  id          String   @id @default(cuid())
+  username    String   @unique
+  password    String
+  name        String
+  role        Role     @default(PLAYER)
+  balance     Float    @default(0)
   createdById String?
-  createdBy User?    @relation("UserHierarchy", fields: [createdById], references: [id])
-  children  User[]   @relation("UserHierarchy")
-  bets      Bet[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdBy   User?    @relation("UserHierarchy", fields: [createdById], references: [id])
+  children    User[]   @relation("UserHierarchy")
+  bets        Bet[]
+  parlays     Parlay[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 enum Role {
   ADMIN
   SUBADMIN
   PLAYER
+}
+
+model Parlay {
+  id              String    @id @default(cuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  initialStake    Float
+  totalOdds       Float
+  potentialReturn Float
+  status          BetStatus @default(PENDING)
+  createdAt       DateTime  @default(now())
+  settledAt       DateTime?
+  bets            Bet[]
 }
 
 model Bet {
@@ -39,6 +53,11 @@ model Bet {
   potentialReturn Float
   status          BetStatus @default(PENDING)
   notes           String?
+  fixtureId       Int?
+  fixtureDate     String?
+  parlayId        String?
+  parlayOrder     Int?
+  parlay          Parlay?   @relation(fields: [parlayId], references: [id])
   createdAt       DateTime  @default(now())
   settledAt       DateTime?
 }

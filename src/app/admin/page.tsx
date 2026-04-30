@@ -13,17 +13,21 @@ export default async function AdminPage() {
     include: {
       children: {
         include: {
-          bets: true
-        }
-      }
+          bets: { orderBy: { createdAt: 'desc' } },
+          parlays: {
+            include: { bets: { orderBy: { parlayOrder: 'asc' } } },
+            orderBy: { createdAt: 'desc' },
+          },
+        },
+      },
     },
-    orderBy: { createdAt: 'desc' }
+    orderBy: { createdAt: 'desc' },
   })
 
   const players = await prisma.user.findMany({
     where: { role: 'PLAYER' },
-    include: { bets: true },
-    orderBy: { createdAt: 'desc' }
+    include: { bets: true, parlays: true },
+    orderBy: { createdAt: 'desc' },
   })
 
   const totalBets = await prisma.bet.count()

@@ -10,8 +10,14 @@ export default async function SubadminPage() {
 
   const players = await prisma.user.findMany({
     where: { createdById: session.userId },
-    include: { bets: { orderBy: { createdAt: 'desc' } } },
-    orderBy: { createdAt: 'desc' }
+    include: {
+      bets: { orderBy: { createdAt: 'desc' } },
+      parlays: {
+        include: { bets: { orderBy: { parlayOrder: 'asc' } } },
+        orderBy: { createdAt: 'desc' },
+      },
+    },
+    orderBy: { createdAt: 'desc' },
   })
 
   return (

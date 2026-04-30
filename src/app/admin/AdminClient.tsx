@@ -2,11 +2,26 @@
 import { useState } from 'react'
 import Link from 'next/link'
 
-type Bet = { id: string; match: string; betType: string; amount: number; potentialReturn: number; status: string }
-type Player = { id: string; username: string; name: string; balance: number; bets: Bet[] }
+type Bet = { id: string; match: string; betType: string; amount: number; odds: number; potentialReturn: number; status: string; createdAt: string; parlayId?: string | null; parlayOrder?: number | null }
+type Parlay = { id: string; initialStake: number; totalOdds: number; potentialReturn: number; status: string; bets: Bet[] }
+type Player = { id: string; username: string; name: string; balance: number; bets: Bet[]; parlays: Parlay[] }
 type Subadmin = { id: string; username: string; name: string; balance: number; children: Player[] }
 type Stats = { totalBets: number; pendingBets: number; wonBets: number; totalSubadmins: number; totalPlayers: number }
 type Session = { userId: string; username: string; role: string; name: string }
+
+function avatar(name: string) {
+  return name.split(' ').map((w: string) => w[0]).join('').toUpperCase().slice(0, 2)
+}
+
+function statusBadge(s: string) {
+  const cfg: Record<string, { bg: string; color: string; label: string }> = {
+    PENDING: { bg: '#f59e0b20', color: '#f59e0b', label: '⏳' },
+    WON: { bg: '#22c55e20', color: '#22c55e', label: '✅' },
+    LOST: { bg: '#ef444420', color: '#ef4444', label: '❌' },
+  }
+  const c = cfg[s] || cfg.PENDING
+  return <span className="text-xs px-1.5 py-0.5 rounded-full" style={{ background: c.bg, color: c.color }}>{c.label} {s}</span>
+}
 
 export default function AdminClient({ session, initialSubadmins, initialPlayers, stats }: {
   session: Session
@@ -14,21 +29,21 @@ export default function AdminClient({ session, initialSubadmins, initialPlayers,
   initialPlayers: Player[]
   stats: Stats
 }) {
-  const [subadmins, setSubadmins] = useState(initialSubadmins)
-  const [tab, setTab] = useState<'overview' | 'subadmins' | 'players'>('overview')
+  const [subadmins] = useState(initialSubadmins)
+  const [tab, setTab] = useState<'overview' | 'bets' | 'subadmins' | 'players'>('overview')
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [form, setForm] = useState({ username: '', password: '', name: '', role: 'SUBADMIN', balance: '0' })
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
+  const [expandedSA, setExpandedSA] = useState<Set<string>>(new Set())
+  const [expandedPlayer, setExpandedPlayer] = useState<Set<string>>(new Set())
+  const [betsFilter, setBetsFilter] = useState<'ALL' | 'PENDING' | 'WON' | 'LOST'>('PENDING')
 
   async function createUser() {
     setCreating(true); setError('')
     try {
-      const res = await fetch('/api/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, balance: Number(form.balance) })
-      })
+      const res = await fetch('/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...form, balance: Number(form.balance) }) })
       const data = await res.json()
       if (!res.ok) { setError(data.error); return }
       setShowCreateForm(false)
@@ -36,6 +51,17 @@ export default function AdminClient({ session, initialSubadmins, initialPlayers,
       window.location.reload()
     } catch { setError('Network error') }
     finally { setCreating(false) }
+  }
+
+  async function settleBetAction(betId: string, status: 'WON' | 'LOST') {
+    await fetch(`/api/bets/${betId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) })
+    window.location.reload()
+  }
+
+  async function deleteBet(betId: string) {
+    if (!confirm('Delete this bet?')) return
+    await fetch(`/api/bets/${betId}`, { method: 'DELETE' })
+    window.location.reload()
   }
 
   const statCards = [
@@ -46,14 +72,21 @@ export default function AdminClient({ session, initialSubadmins, initialPlayers,
     { label: 'Won', value: stats.wonBets, color: '#22c55e', icon: '✅' },
   ]
 
+  const tabs = [
+    { key: 'overview', label: '🏠 Overview' },
+    { key: 'bets', label: '🎯 Bets', badge: stats.pendingBets },
+    { key: 'subadmins', label: '👤 SubAdmins' },
+    { key: 'players', label: '🎮 Players' },
+  ] as const
+
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-2xl font-bold text-white">Admin Dashboard</h1>
-          <p style={{ color: 'var(--muted)' }} className="text-sm mt-1">Manage your entire betting group</p>
+          <p style={{ color: 'var(--muted)' }} className="text-sm mt-1">Full system overview</p>
         </div>
-        <button onClick={() => setShowCreateForm(true)} className="px-5 py-2.5 rounded-xl font-medium text-white transition-opacity hover:opacity-90" style={{ background: 'var(--accent)' }}>
+        <button onClick={() => setShowCreateForm(true)} className="px-5 py-2.5 rounded-xl font-medium text-white hover:opacity-90" style={{ background: 'var(--accent)' }}>
           + Create User
         </button>
       </div>
@@ -70,35 +103,42 @@ export default function AdminClient({ session, initialSubadmins, initialPlayers,
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 mb-6">
-        {(['overview', 'subadmins', 'players'] as const).map(t => (
-          <button key={t} onClick={() => setTab(t)} className="px-5 py-2 rounded-lg text-sm font-medium capitalize transition-all"
-            style={{ background: tab === t ? 'var(--accent)' : 'var(--surface)', color: tab === t ? 'white' : 'var(--muted)', border: '1px solid var(--surface2)' }}>
-            {t}
+      <div className="flex gap-2 mb-6 flex-wrap">
+        {tabs.map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)} className="px-5 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2"
+            style={{ background: tab === t.key ? 'var(--accent)' : 'var(--surface)', color: tab === t.key ? 'white' : 'var(--muted)', border: '1px solid var(--surface2)' }}>
+            {t.label}
+            {'badge' in t && t.badge > 0 && <span className="text-xs px-1.5 py-0.5 rounded-full bg-orange-500 text-white font-bold">{t.badge}</span>}
           </button>
         ))}
       </div>
 
-      {/* Overview Tab */}
+      {/* ── OVERVIEW TAB ── */}
       {tab === 'overview' && (
         <div className="space-y-4">
           {subadmins.map(sa => {
             const totalStake = sa.children.reduce((sum, p) => sum + p.bets.filter(b => b.status === 'PENDING').reduce((s, b) => s + b.amount, 0), 0)
             const totalPotential = sa.children.reduce((sum, p) => sum + p.bets.filter(b => b.status === 'PENDING').reduce((s, b) => s + b.potentialReturn, 0), 0)
+            const totalPending = sa.children.reduce((sum, p) => sum + p.bets.filter(b => b.status === 'PENDING').length, 0)
             return (
               <div key={sa.id} className="rounded-xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--surface2)' }}>
                 <div className="flex items-start justify-between">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold text-white">{sa.name}</span>
-                      <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#6366f120', color: '#6366f1' }}>@{sa.username}</span>
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold text-white" style={{ background: '#6366f1' }}>
+                      {avatar(sa.name)}
                     </div>
-                    <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>{sa.children.length} player{sa.children.length !== 1 ? 's' : ''}</p>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-white">{sa.name}</span>
+                        <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#6366f120', color: '#6366f1' }}>@{sa.username}</span>
+                      </div>
+                      <p className="text-sm mt-0.5" style={{ color: 'var(--muted)' }}>{sa.children.length} players · {totalPending} pending bets</p>
+                    </div>
                   </div>
                   <div className="text-right">
                     <div className="text-sm" style={{ color: 'var(--muted)' }}>Pending stake</div>
                     <div className="font-bold text-white">€{totalStake.toFixed(2)}</div>
-                    <div className="text-xs" style={{ color: '#22c55e' }}>Potential: €{totalPotential.toFixed(2)}</div>
+                    <div className="text-xs" style={{ color: '#22c55e' }}>→ €{totalPotential.toFixed(2)}</div>
                   </div>
                 </div>
                 {sa.children.length > 0 && (
@@ -107,12 +147,12 @@ export default function AdminClient({ session, initialSubadmins, initialPlayers,
                       const pending = player.bets.filter(b => b.status === 'PENDING')
                       const stake = pending.reduce((s, b) => s + b.amount, 0)
                       return (
-                        <Link href={`/player/${player.id}`} key={player.id} className="rounded-lg p-3 transition-colors hover:opacity-80" style={{ background: 'var(--surface2)' }}>
+                        <Link href={`/player/${player.id}`} key={player.id} className="rounded-lg p-3 hover:opacity-80 transition-opacity" style={{ background: 'var(--surface2)' }}>
                           <div className="font-medium text-white text-sm">{player.name}</div>
-                          <div className="text-xs mt-1" style={{ color: 'var(--muted)' }}>@{player.username}</div>
+                          <div className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>@{player.username}</div>
                           <div className="flex justify-between mt-2 text-xs">
                             <span style={{ color: '#f59e0b' }}>{pending.length} pending</span>
-                            <span style={{ color: 'var(--muted)' }}>€{stake.toFixed(2)}</span>
+                            <span style={{ color: 'var(--muted)' }}>€{stake.toFixed(0)}</span>
                           </div>
                         </Link>
                       )
@@ -124,19 +164,141 @@ export default function AdminClient({ session, initialSubadmins, initialPlayers,
           })}
           {subadmins.length === 0 && (
             <div className="text-center py-16" style={{ color: 'var(--muted)' }}>
-              <div className="text-4xl mb-3">👤</div>
-              <p>No subadmins yet. Create one to get started.</p>
+              <div className="text-4xl mb-3">👤</div><p>No subadmins yet.</p>
             </div>
           )}
         </div>
       )}
 
-      {/* Subadmins Tab */}
+      {/* ── BETS TAB (by SubAdmin) ── */}
+      {tab === 'bets' && (
+        <div>
+          <div className="flex gap-1 rounded-lg p-1 mb-6 w-fit" style={{ background: 'var(--surface)' }}>
+            {(['PENDING','ALL','WON','LOST'] as const).map(f => (
+              <button key={f} onClick={() => setBetsFilter(f)} className="px-3 py-1.5 rounded-md text-xs font-medium transition-all"
+                style={{ background: betsFilter === f ? 'var(--accent)' : 'transparent', color: betsFilter === f ? 'white' : 'var(--muted)' }}>
+                {f}
+              </button>
+            ))}
+          </div>
+
+          <div className="space-y-6">
+            {subadmins.map(sa => {
+              const allSABets = sa.children.flatMap(p => p.bets.map(b => ({ ...b, playerName: p.name, playerId: p.id, playerUsername: p.username })))
+              const filtered = betsFilter === 'ALL' ? allSABets : allSABets.filter(b => b.status === betsFilter)
+              if (filtered.length === 0) return null
+
+              const saExpanded = expandedSA.has(sa.id)
+
+              return (
+                <div key={sa.id} className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--surface2)' }}>
+                  {/* SubAdmin header */}
+                  <button className="w-full flex items-center justify-between px-5 py-4 hover:opacity-90 transition-opacity"
+                    style={{ background: 'var(--surface2)' }}
+                    onClick={() => setExpandedSA(prev => { const n = new Set(prev); n.has(sa.id) ? n.delete(sa.id) : n.add(sa.id); return n })}>
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold text-white" style={{ background: '#6366f1' }}>
+                        {avatar(sa.name)}
+                      </div>
+                      <div className="text-left">
+                        <div className="font-semibold text-white">{sa.name} <span className="text-xs font-normal" style={{ color: 'var(--muted)' }}>@{sa.username}</span></div>
+                        <div className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>{filtered.length} {betsFilter.toLowerCase()} bets · {sa.children.length} players</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div className="text-right text-xs">
+                        <div style={{ color: 'var(--muted)' }}>Stake: <b className="text-white">€{filtered.reduce((s, b) => s + b.amount, 0).toFixed(0)}</b></div>
+                        <div style={{ color: '#22c55e' }}>Potential: €{filtered.reduce((s, b) => s + b.potentialReturn, 0).toFixed(0)}</div>
+                      </div>
+                      <span style={{ color: 'var(--muted)' }}>{saExpanded ? '▲' : '▼'}</span>
+                    </div>
+                  </button>
+
+                  {saExpanded && (
+                    <div style={{ background: 'var(--surface)' }}>
+                      {sa.children.map(player => {
+                        const playerBets = betsFilter === 'ALL' ? player.bets : player.bets.filter(b => b.status === betsFilter)
+                        if (playerBets.length === 0) return null
+
+                        const pExpanded = expandedPlayer.has(player.id)
+                        const stake = playerBets.reduce((s, b) => s + b.amount, 0)
+
+                        return (
+                          <div key={player.id} style={{ borderTop: '1px solid var(--surface2)' }}>
+                            <button className="w-full flex items-center justify-between px-6 py-3 hover:opacity-90 transition-opacity"
+                              style={{ background: '#1e293b40' }}
+                              onClick={() => setExpandedPlayer(prev => { const n = new Set(prev); n.has(player.id) ? n.delete(player.id) : n.add(player.id); return n })}>
+                              <div className="flex items-center gap-3">
+                                <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white" style={{ background: 'var(--accent)' }}>
+                                  {avatar(player.name)}
+                                </div>
+                                <div className="text-left">
+                                  <span className="text-sm font-medium text-white">{player.name}</span>
+                                  <span className="text-xs ml-2" style={{ color: 'var(--muted)' }}>@{player.username}</span>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-4 text-xs">
+                                <span style={{ color: '#f59e0b' }}>{playerBets.length} bets · €{stake.toFixed(0)}</span>
+                                <span style={{ color: 'var(--muted)' }}>{pExpanded ? '▲' : '▼'}</span>
+                              </div>
+                            </button>
+
+                            {pExpanded && playerBets.map((bet, idx) => (
+                              <div key={bet.id} className="flex items-center gap-3 px-8 py-3" style={{ borderTop: '1px solid var(--surface2)', background: 'var(--surface)' }}>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-medium text-white text-sm">{bet.match}</span>
+                                    {bet.parlayId && (
+                                      <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#f59e0b20', color: '#f59e0b' }}>🔗 Leg {bet.parlayOrder}</span>
+                                    )}
+                                    <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--surface2)', color: '#6366f1' }}>{bet.betType}</span>
+                                  </div>
+                                  <div className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
+                                    €{bet.amount.toFixed(0)} @{bet.odds}x → <span style={{ color: '#22c55e' }}>€{bet.potentialReturn.toFixed(0)}</span>
+                                    {' · '}{new Date(bet.createdAt).toLocaleDateString('el-GR')}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2 flex-shrink-0">
+                                  {statusBadge(bet.status)}
+                                  {bet.status === 'PENDING' && (
+                                    <>
+                                      <button onClick={() => settleBetAction(bet.id, 'WON')} className="text-xs px-2 py-1 rounded-lg" style={{ background: '#22c55e20', color: '#22c55e' }}>Won</button>
+                                      <button onClick={() => settleBetAction(bet.id, 'LOST')} className="text-xs px-2 py-1 rounded-lg" style={{ background: '#ef444420', color: '#ef4444' }}>Lost</button>
+                                    </>
+                                  )}
+                                  {!bet.parlayId && (
+                                    <button onClick={() => deleteBet(bet.id)} className="text-xs px-2 py-1 rounded-lg" style={{ background: '#ef444410', color: '#ef4444' }}>🗑</button>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+            {subadmins.every(sa => {
+              const bets = sa.children.flatMap(p => p.bets)
+              return (betsFilter === 'ALL' ? bets : bets.filter(b => b.status === betsFilter)).length === 0
+            }) && (
+              <div className="text-center py-16" style={{ color: 'var(--muted)' }}>
+                <div className="text-4xl mb-3">📭</div>
+                <p>No {betsFilter.toLowerCase()} bets across the system.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── SUBADMINS TAB ── */}
       {tab === 'subadmins' && (
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--surface2)' }}>
           <table className="w-full">
             <thead style={{ background: 'var(--surface2)' }}>
-              <tr>{['Name', 'Username', 'Players', 'Pending Bets', 'Actions'].map(h => (
+              <tr>{['Name','Username','Players','Pending Bets','Actions'].map(h => (
                 <th key={h} className="text-left px-5 py-3 text-sm font-medium" style={{ color: 'var(--muted)' }}>{h}</th>
               ))}</tr>
             </thead>
@@ -150,25 +312,23 @@ export default function AdminClient({ session, initialSubadmins, initialPlayers,
                     <td className="px-5 py-4 text-white">{sa.children.length}</td>
                     <td className="px-5 py-4"><span className="text-xs px-2 py-1 rounded-full" style={{ background: '#f59e0b20', color: '#f59e0b' }}>{pendingCount} pending</span></td>
                     <td className="px-5 py-4">
-                      <Link href={`/subadmin/${sa.id}`} className="text-sm hover:opacity-80" style={{ color: 'var(--accent)' }}>View →</Link>
+                      <button onClick={() => { setTab('bets'); setExpandedSA(new Set([sa.id])) }} className="text-sm hover:opacity-80 mr-3" style={{ color: 'var(--accent)' }}>Bets →</button>
                     </td>
                   </tr>
                 )
               })}
-              {subadmins.length === 0 && (
-                <tr><td colSpan={5} className="text-center py-12" style={{ color: 'var(--muted)' }}>No subadmins yet</td></tr>
-              )}
+              {subadmins.length === 0 && <tr><td colSpan={5} className="text-center py-12" style={{ color: 'var(--muted)' }}>No subadmins yet</td></tr>}
             </tbody>
           </table>
         </div>
       )}
 
-      {/* Players Tab */}
+      {/* ── PLAYERS TAB ── */}
       {tab === 'players' && (
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--surface2)' }}>
           <table className="w-full">
             <thead style={{ background: 'var(--surface2)' }}>
-              <tr>{['Name', 'Username', 'Balance', 'Total Bets', 'Actions'].map(h => (
+              <tr>{['Name','Username','Balance','Total Bets','Actions'].map(h => (
                 <th key={h} className="text-left px-5 py-3 text-sm font-medium" style={{ color: 'var(--muted)' }}>{h}</th>
               ))}</tr>
             </thead>
@@ -184,9 +344,7 @@ export default function AdminClient({ session, initialSubadmins, initialPlayers,
                   </td>
                 </tr>
               ))}
-              {initialPlayers.length === 0 && (
-                <tr><td colSpan={5} className="text-center py-12" style={{ color: 'var(--muted)' }}>No players yet</td></tr>
-              )}
+              {initialPlayers.length === 0 && <tr><td colSpan={5} className="text-center py-12" style={{ color: 'var(--muted)' }}>No players yet</td></tr>}
             </tbody>
           </table>
         </div>
@@ -199,9 +357,9 @@ export default function AdminClient({ session, initialSubadmins, initialPlayers,
             <h2 className="text-lg font-bold text-white mb-5">Create New User</h2>
             <div className="space-y-4">
               {[
-                { label: 'Full Name', key: 'name', type: 'text', placeholder: 'e.g. Nikos Papadopoulos' },
-                { label: 'Username', key: 'username', type: 'text', placeholder: 'e.g. nikos123' },
-                { label: 'Password', key: 'password', type: 'password', placeholder: 'Minimum 6 characters' },
+                { label: 'Full Name', key: 'name', type: 'text', placeholder: 'Nikos Papadopoulos' },
+                { label: 'Username', key: 'username', type: 'text', placeholder: 'nikos123' },
+                { label: 'Password', key: 'password', type: 'password', placeholder: 'Min 6 chars' },
                 { label: 'Starting Balance (€)', key: 'balance', type: 'number', placeholder: '0' },
               ].map(f => (
                 <div key={f.key}>
@@ -217,15 +375,15 @@ export default function AdminClient({ session, initialSubadmins, initialPlayers,
                 <select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))}
                   className="w-full px-4 py-2.5 rounded-lg text-white outline-none"
                   style={{ background: 'var(--surface2)', border: '1px solid #334155' }}>
-                  <option value="SUBADMIN">Subadmin</option>
+                  <option value="SUBADMIN">SubAdmin</option>
                   <option value="PLAYER">Player</option>
                 </select>
               </div>
-              {error && <p className="text-sm" style={{ color: 'var(--red)' }}>{error}</p>}
+              {error && <p className="text-sm" style={{ color: '#ef4444' }}>{error}</p>}
               <div className="flex gap-3 pt-2">
-                <button onClick={() => setShowCreateForm(false)} className="flex-1 py-2.5 rounded-lg font-medium" style={{ background: 'var(--surface2)', color: 'var(--muted)' }}>Cancel</button>
-                <button onClick={createUser} disabled={creating} className="flex-1 py-2.5 rounded-lg font-medium text-white disabled:opacity-50" style={{ background: 'var(--accent)' }}>
-                  {creating ? 'Creating...' : 'Create'}
+                <button onClick={() => setShowCreateForm(false)} className="flex-1 py-2.5 rounded-xl font-medium" style={{ background: 'var(--surface2)', color: 'var(--muted)' }}>Cancel</button>
+                <button onClick={createUser} disabled={creating} className="flex-1 py-2.5 rounded-xl font-medium text-white disabled:opacity-50" style={{ background: 'var(--accent)' }}>
+                  {creating ? 'Creating…' : 'Create'}
                 </button>
               </div>
             </div>
