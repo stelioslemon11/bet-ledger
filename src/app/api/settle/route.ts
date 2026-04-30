@@ -5,6 +5,15 @@ import { evaluateBetResult, settleBet } from '@/lib/bets'
 const API_KEY = process.env.FOOTBALL_API_KEY || ''
 const BASE_URL = 'https://v3.football.api-sports.io'
 
+// Statuses where full-time result is final
+const FT_STATUSES = ['FT', 'AET', 'PEN', 'AWD', 'WO']
+// Statuses where halftime score is available (HT break, 2nd half in progress, or finished)
+const HT_AVAILABLE_STATUSES = ['HT', '2H', 'ET', 'BT', 'P', 'FT', 'AET', 'PEN', 'AWD', 'WO']
+
+function isHtBet(betType: string) {
+  return /ht/i.test(betType)
+}
+
 async function runSettle() {
   if (!API_KEY) return { message: 'No API key configured', settled: 0 }
 
@@ -27,36 +36,59 @@ async function runSettle() {
   if (!res.ok) return { error: `API error ${res.status}`, settled: 0 }
 
   const json = await res.json()
-  const fixtures = json.response || []
-  const finishedStatuses = ['FT', 'AET', 'PEN', 'AWD']
-  const finished = fixtures.filter((f: any) => finishedStatuses.includes(f.fixture.status.short))
+  const fixtures: any[] = json.response || []
 
   let settled = 0
   const results: string[] = []
+  const skipped: string[] = []
 
-  for (const fixture of finished) {
-    const fixtureId = fixture.fixture.id
+  for (const fixture of fixtures) {
+    const fixtureId: number = fixture.fixture.id
+    const status: string = fixture.fixture.status.short
     const homeGoals: number = fixture.goals.home ?? 0
     const awayGoals: number = fixture.goals.away ?? 0
-    const matchName = `${fixture.teams.home.name} vs ${fixture.teams.away.name} (${homeGoals}-${awayGoals})`
+    const htHome: number | undefined = fixture.score?.halftime?.home ?? undefined
+    const htAway: number | undefined = fixture.score?.halftime?.away ?? undefined
+    const matchName = `${fixture.teams.home.name} vs ${fixture.teams.away.name}`
+    const score = `(${homeGoals}-${awayGoals}${htHome !== undefined ? ` | HT:${htHome}-${htAway}` : ''})`
 
     const toSettle = pendingBets.filter(b => b.fixtureId === fixtureId)
+
     for (const bet of toSettle) {
-      const won = evaluateBetResult(bet.betType, homeGoals, awayGoals)
-      if (won === null) {
-        results.push(`SKIP: ${matchName} — ${bet.betType} (unsupported)`)
+      const htBet = isHtBet(bet.betType)
+
+      // Decide if we can evaluate this bet yet
+      const canEvaluate = htBet
+        ? HT_AVAILABLE_STATUSES.includes(status)
+        : FT_STATUSES.includes(status)
+
+      if (!canEvaluate) {
+        skipped.push(`⏳ WAIT: ${matchName} [${status}] — ${bet.betType}`)
         continue
       }
+
+      const won = htBet
+        ? evaluateBetResult(bet.betType, homeGoals, awayGoals, htHome, htAway)
+        : evaluateBetResult(bet.betType, homeGoals, awayGoals)
+
+      if (won === null) {
+        results.push(`⚠️ SKIP: ${matchName} ${score} — "${bet.betType}" not recognised`)
+        continue
+      }
+
       await settleBet(bet.id, won ? 'WON' : 'LOST')
-      results.push(`${won ? '✅ WON' : '❌ LOST'}: ${matchName} — ${bet.betType}`)
+      results.push(`${won ? '✅ WON' : '❌ LOST'}: ${matchName} ${score} — ${bet.betType}`)
       settled++
     }
   }
 
+  const waitingCount = skipped.length
+  const allResults = [...results, ...skipped]
+
   return {
-    message: `Checked ${fixtureIds.length} fixtures, ${finished.length} finished → settled ${settled} bets`,
+    message: `Checked ${fixtureIds.length} fixtures → settled ${settled} bet${settled !== 1 ? 's' : ''}${waitingCount > 0 ? `, ${waitingCount} still in progress` : ''}`,
     settled,
-    results,
+    results: allResults,
     pendingWithFixture: pendingBets.length,
   }
 }
