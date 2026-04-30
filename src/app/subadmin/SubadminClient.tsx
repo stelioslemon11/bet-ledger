@@ -5,7 +5,7 @@ import Link from 'next/link'
 type Bet = {
   id: string; match: string; betType: string; amount: number; odds: number
   potentialReturn: number; status: string; createdAt: string; notes?: string
-  fixtureId?: number | null; parlayId?: string | null; parlayOrder?: number | null
+  fixtureId?: number | null; fixtureDate?: string | null; parlayId?: string | null; parlayOrder?: number | null
 }
 type Parlay = {
   id: string; initialStake: number; totalOdds: number; potentialReturn: number
@@ -14,7 +14,7 @@ type Parlay = {
 type Player = { id: string; username: string; name: string; balance: number; bets: Bet[]; parlays: Parlay[] }
 type Session = { userId: string; username: string; role: string; name: string }
 type Match = { id: number; league: string; country: string; home: string; away: string; date: string; time: string; status: string; elapsed?: number; homeScore?: number; awayScore?: number; isLive: boolean }
-type ParlayLeg = { match: string; betType: string; odds: string; fixtureId: number | null }
+type ParlayLeg = { match: string; betType: string; odds: string; fixtureId: number | null; fixtureDate: string | null }
 type PlayerBet = Bet & { playerName: string; playerId: string; playerUsername: string; parlayTotalLegs?: number; parlayInitialStake?: number; parlayTotalOdds?: number; parlayPotential?: number }
 
 const BET_TYPES = [
@@ -84,13 +84,13 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
   const [betMode, setBetMode] = useState<'single' | 'parlay'>('single')
 
   // Single bet form
-  const [betForm, setBetForm] = useState({ match: '', betType: 'Over 2.5', amount: '', odds: '', notes: '', fixtureId: null as number | null })
+  const [betForm, setBetForm] = useState({ match: '', betType: 'Over 2.5', amount: '', odds: '', notes: '', fixtureId: null as number | null, fixtureDate: null as string | null })
 
   // Parlay form
   const [parlayStake, setParlayStake] = useState('')
   const [parlayLegs, setParlayLegs] = useState<ParlayLeg[]>([
-    { match: '', betType: 'Over 2.5', odds: '', fixtureId: null },
-    { match: '', betType: 'Over 2.5', odds: '', fixtureId: null },
+    { match: '', betType: 'Over 2.5', odds: '', fixtureId: null, fixtureDate: null },
+    { match: '', betType: 'Over 2.5', odds: '', fixtureId: null, fixtureDate: null },
   ])
 
   // Match browser
@@ -205,10 +205,12 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
 
   function selectMatch(m: Match) {
     const label = `${m.home} vs ${m.away}`
+    // Store fixtureDate as "YYYY-MM-DD HH:MM" already in Athens/Europe timezone
+    const fDate = m.date && m.time ? `${m.date} ${m.time}` : null
     if (browseForLeg === null) {
-      setBetForm(f => ({ ...f, match: label, fixtureId: m.id }))
+      setBetForm(f => ({ ...f, match: label, fixtureId: m.id, fixtureDate: fDate }))
     } else {
-      setParlayLegs(legs => legs.map((l, i) => i === browseForLeg ? { ...l, match: label, fixtureId: m.id } : l))
+      setParlayLegs(legs => legs.map((l, i) => i === browseForLeg ? { ...l, match: label, fixtureId: m.id, fixtureDate: fDate } : l))
     }
     setShowMatchBrowser(false)
   }
@@ -252,12 +254,12 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
           userId: betTargetId, match: betForm.match, betType: betForm.betType,
           amount: Number(betForm.amount), odds: Number(betForm.odds),
           potentialReturn: Number(betForm.amount) * Number(betForm.odds),
-          notes: betForm.notes, fixtureId: betForm.fixtureId
+          notes: betForm.notes, fixtureId: betForm.fixtureId, fixtureDate: betForm.fixtureDate
         }) })
       const data = await res.json()
       if (!res.ok) { setError(data.error); return }
       setShowAddBet(false)
-      setBetForm({ match: '', betType: 'Over 2.5', amount: '', odds: '', notes: '', fixtureId: null })
+      setBetForm({ match: '', betType: 'Over 2.5', amount: '', odds: '', notes: '', fixtureId: null, fixtureDate: null })
       window.location.reload()
     } catch { setError('Network error') }
     finally { setLoading(false) }
@@ -272,14 +274,14 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
       const legs = parlayLegs.map((l, i) => ({
         match: l.match, betType: l.betType, odds: Number(l.odds),
         amount: running[i].stake, potentialReturn: running[i].potential,
-        fixtureId: l.fixtureId,
+        fixtureId: l.fixtureId, fixtureDate: l.fixtureDate,
       }))
       const res = await fetch('/api/parlays', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: betTargetId, initialStake: Number(parlayStake), legs }) })
       const data = await res.json()
       if (!res.ok) { setError(data.error); return }
       setShowAddBet(false)
-      setParlayStake(''); setParlayLegs([{ match:'', betType:'Over 2.5', odds:'', fixtureId:null },{ match:'', betType:'Over 2.5', odds:'', fixtureId:null }])
+      setParlayStake(''); setParlayLegs([{ match:'', betType:'Over 2.5', odds:'', fixtureId:null, fixtureDate:null },{ match:'', betType:'Over 2.5', odds:'', fixtureId:null, fixtureDate:null }])
       window.location.reload()
     } catch { setError('Network error') }
     finally { setLoading(false) }
@@ -436,7 +438,14 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
           )}
 
           {/* GROUP BY MATCH */}
-          {betsGroupBy === 'match' && Object.entries(betsByMatch).map(([matchName, bets]) => {
+          {betsGroupBy === 'match' && Object.entries(betsByMatch)
+            .sort(([, aBets], [, bBets]) => {
+              // Sort match groups by earliest kick-off time (Athens TZ, stored as "YYYY-MM-DD HH:MM")
+              const aDate = aBets.map(b => b.fixtureDate).filter(Boolean).sort()[0] || '9999'
+              const bDate = bBets.map(b => b.fixtureDate).filter(Boolean).sort()[0] || '9999'
+              return aDate.localeCompare(bDate)
+            })
+            .map(([matchName, bets]) => {
             // Only count parlay initial stake once per match (leg 1); skip carry-forward legs
             const matchStake = bets.filter(b => !b.parlayId || b.parlayOrder === 1).reduce((s, b) => s + b.amount, 0)
             const matchPotential = bets.filter(b => !b.parlayId || b.parlayOrder === 1).reduce((s, b) => s + (b.parlayId ? (b.parlayPotential || 0) : b.potentialReturn), 0)
@@ -446,6 +455,10 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
                   <div className="flex items-center gap-2">
                     <span className="text-lg">⚽</span>
                     <span className="font-semibold text-white">{matchName}</span>
+                    {(() => {
+                      const t = bets.map(b => b.fixtureDate).filter(Boolean).sort()[0]
+                      return t ? <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--surface)', color: '#94a3b8' }}>🕐 {t.split(' ')[1]}</span> : null
+                    })()}
                   </div>
                   <div className="flex items-center gap-4 text-xs">
                     <span style={{ color: 'var(--muted)' }}>Stake: <b className="text-white">€{matchStake.toFixed(0)}</b></span>
@@ -784,7 +797,7 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
                     })}
                   </div>
 
-                  <button onClick={() => setParlayLegs(ls => [...ls, { match: '', betType: 'Over 2.5', odds: '', fixtureId: null }])}
+                  <button onClick={() => setParlayLegs(ls => [...ls, { match: '', betType: 'Over 2.5', odds: '', fixtureId: null, fixtureDate: null }])}
                     className="w-full py-2.5 rounded-xl text-sm font-medium" style={{ background: 'var(--surface2)', color: '#f59e0b', border: '1px dashed #f59e0b50' }}>
                     + Add Leg
                   </button>

@@ -33,6 +33,7 @@ export async function POST(req: NextRequest) {
             odds: Number(leg.odds),
             potentialReturn: Number(leg.potentialReturn),
             fixtureId: leg.fixtureId ? Number(leg.fixtureId) : null,
+            fixtureDate: leg.fixtureDate || null,
             parlayOrder: i + 1,
           })),
         },

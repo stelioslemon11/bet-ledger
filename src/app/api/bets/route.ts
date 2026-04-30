@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
   const session = await getSession()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { userId, match, betType, amount, odds, potentialReturn, notes } = await req.json()
+  const { userId, match, betType, amount, odds, potentialReturn, notes, fixtureId, fixtureDate } = await req.json()
 
   if (!match || !betType || !amount || !odds || !potentialReturn) {
     return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const bet = await prisma.bet.create({
-      data: { userId: targetUserId, match, betType, amount: Number(amount), odds: Number(odds), potentialReturn: Number(potentialReturn), notes },
+      data: { userId: targetUserId, match, betType, amount: Number(amount), odds: Number(odds), potentialReturn: Number(potentialReturn), notes, fixtureId: fixtureId ? Number(fixtureId) : null, fixtureDate: fixtureDate || null },
       include: { user: { select: { id: true, name: true, username: true } } }
     })
     return NextResponse.json({ bet }, { status: 201 })
