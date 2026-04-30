@@ -386,6 +386,11 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
             const pending = player.bets.filter(b => b.status === 'PENDING')
             const won = player.bets.filter(b => b.status === 'WON')
             const lost = player.bets.filter(b => b.status === 'LOST')
+            // Available = total balance minus pending stakes (parlay counts only leg 1)
+            const pendingStake = pending
+              .filter(b => !b.parlayId || b.parlayOrder === 1)
+              .reduce((s, b) => s + b.amount, 0)
+            const availableBalance = player.balance - pendingStake
             return (
               <div key={player.id} className="rounded-xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--surface2)' }}>
                 <div className="flex items-start justify-between mb-4">
@@ -399,8 +404,13 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
                     </div>
                   </div>
                   <div className="text-right">
-                    <div className="text-xs" style={{ color: 'var(--muted)' }}>Balance</div>
-                    <div className="font-bold" style={{ color: player.balance >= 0 ? '#22c55e' : '#ef4444' }}>€{player.balance.toFixed(2)}</div>
+                    <div className="text-xs mb-0.5" style={{ color: 'var(--muted)' }}>Total Balance</div>
+                    <div className="font-bold text-sm" style={{ color: 'var(--muted)' }}>€{player.balance.toFixed(2)}</div>
+                    <div className="text-xs mt-1" style={{ color: 'var(--muted)' }}>Available</div>
+                    <div className="font-bold" style={{ color: availableBalance >= 0 ? '#22c55e' : '#ef4444' }}>€{availableBalance.toFixed(2)}</div>
+                    {pendingStake > 0 && (
+                      <div className="text-xs mt-0.5" style={{ color: '#f59e0b' }}>🔒 €{pendingStake.toFixed(2)} in bets</div>
+                    )}
                   </div>
                 </div>
                 <div className="flex gap-3 text-xs mb-4">

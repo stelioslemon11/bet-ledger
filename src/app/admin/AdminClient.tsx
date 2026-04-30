@@ -367,17 +367,26 @@ export default function AdminClient({ session, initialSubadmins, initialPlayers,
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--surface2)' }}>
           <table className="w-full">
             <thead style={{ background: 'var(--surface2)' }}>
-              <tr>{['Name','Username','Balance','Total Bets','Actions'].map(h => (
+              <tr>{['Name','Username','Total / Available','Pending Bets','Actions'].map(h => (
                 <th key={h} className="text-left px-5 py-3 text-sm font-medium" style={{ color: 'var(--muted)' }}>{h}</th>
               ))}</tr>
             </thead>
             <tbody style={{ background: 'var(--surface)' }}>
-              {initialPlayers.map((p, i) => (
+              {initialPlayers.map((p, i) => {
+                const pendingStake = p.bets
+                  .filter((b: any) => b.status === 'PENDING' && (!b.parlayId || b.parlayOrder === 1))
+                  .reduce((s: number, b: any) => s + b.amount, 0)
+                const available = p.balance - pendingStake
+                return (
                 <tr key={p.id} style={{ borderTop: i > 0 ? '1px solid var(--surface2)' : undefined }}>
                   <td className="px-5 py-4 text-white font-medium">{p.name}</td>
                   <td className="px-5 py-4 text-sm" style={{ color: 'var(--muted)' }}>@{p.username}</td>
-                  <td className="px-5 py-4" style={{ color: p.balance >= 0 ? '#22c55e' : '#ef4444' }}>€{p.balance.toFixed(2)}</td>
-                  <td className="px-5 py-4 text-white">{p.bets.length}</td>
+                  <td className="px-5 py-4">
+                    <div className="text-xs" style={{ color: 'var(--muted)' }}>€{p.balance.toFixed(2)}</div>
+                    <div className="font-semibold" style={{ color: available >= 0 ? '#22c55e' : '#ef4444' }}>€{available.toFixed(2)} avail.</div>
+                    {pendingStake > 0 && <div className="text-xs" style={{ color: '#f59e0b' }}>🔒 €{pendingStake.toFixed(2)}</div>}
+                  </td>
+                  <td className="px-5 py-4 text-white">{p.bets.filter((b:any) => b.status === 'PENDING').length} pending</td>
                   <td className="px-5 py-4">
                     <div className="flex items-center gap-2">
                       <Link href={`/player/${p.id}`} className="text-sm hover:opacity-80" style={{ color: 'var(--accent)' }}>View →</Link>
@@ -392,7 +401,7 @@ export default function AdminClient({ session, initialSubadmins, initialPlayers,
                     </div>
                   </td>
                 </tr>
-              ))}
+                )})}
               {initialPlayers.length === 0 && <tr><td colSpan={5} className="text-center py-12" style={{ color: 'var(--muted)' }}>No players yet</td></tr>}
             </tbody>
           </table>

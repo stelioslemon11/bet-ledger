@@ -18,6 +18,7 @@ export default function PlayerClient({ user, session }: { user: User; session: S
   const wonBets = user.bets.filter(b => b.status === 'WON')
   const lostBets = user.bets.filter(b => b.status === 'LOST')
   const totalStake = pendingBets.reduce((s, b) => s + b.amount, 0)
+  const availableBalance = user.balance - totalStake
   const totalPotential = pendingBets.reduce((s, b) => s + b.potentialReturn, 0)
   const totalWon = wonBets.reduce((s, b) => s + b.potentialReturn, 0)
   const totalLost = lostBets.reduce((s, b) => s + b.amount, 0)
@@ -54,10 +55,15 @@ export default function PlayerClient({ user, session }: { user: User; session: S
             <p className="text-sm mt-0.5" style={{ color: 'var(--muted)' }}>@{user.username}</p>
           </div>
           <div className="text-right">
-            <div className="text-sm" style={{ color: 'var(--muted)' }}>Current Balance</div>
-            <div className="text-3xl font-bold mt-1" style={{ color: user.balance >= 0 ? '#22c55e' : '#ef4444' }}>
-              €{user.balance.toFixed(2)}
+            <div className="text-xs" style={{ color: 'var(--muted)' }}>Total Balance</div>
+            <div className="text-lg font-semibold" style={{ color: 'var(--muted)' }}>€{user.balance.toFixed(2)}</div>
+            <div className="text-xs mt-1" style={{ color: 'var(--muted)' }}>Available</div>
+            <div className="text-3xl font-bold" style={{ color: availableBalance >= 0 ? '#22c55e' : '#ef4444' }}>
+              €{availableBalance.toFixed(2)}
             </div>
+            {totalStake > 0 && (
+              <div className="text-xs mt-0.5" style={{ color: '#f59e0b' }}>🔒 €{totalStake.toFixed(2)} in open bets</div>
+            )}
           </div>
         </div>
 
