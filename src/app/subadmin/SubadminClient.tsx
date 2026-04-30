@@ -151,8 +151,16 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
   }, {})
 
   const pendingCount = allBets.filter(b => b.status === 'PENDING').length
-  const totalPendingStake = allBets.filter(b => b.status === 'PENDING').reduce((s, b) => s + b.amount, 0)
-  const totalPotential = allBets.filter(b => b.status === 'PENDING').reduce((s, b) => s + b.potentialReturn, 0)
+  // For parlays: only count the initial stake once (leg 1), skip subsequent legs whose
+  // "amount" is the running carry-forward — not real additional cash at risk.
+  // For potential: parlay leg 1 carries parlayPotential (the full final return); skip other legs.
+  const pendingBets = allBets.filter(b => b.status === 'PENDING')
+  const totalPendingStake = pendingBets
+    .filter(b => !b.parlayId || b.parlayOrder === 1)
+    .reduce((s, b) => s + b.amount, 0)
+  const totalPotential = pendingBets
+    .filter(b => !b.parlayId || b.parlayOrder === 1)
+    .reduce((s, b) => s + (b.parlayId ? (b.parlayPotential || 0) : b.potentialReturn), 0)
 
   // Match browser
   const fetchMatches = useCallback(async () => {
@@ -416,7 +424,7 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
               </button>
             </div>
             <div className="text-xs ml-auto" style={{ color: 'var(--muted)' }}>
-              {filteredBets.length} bet{filteredBets.length !== 1 ? 's' : ''} · Stake €{filteredBets.reduce((s,b)=>s+b.amount,0).toFixed(0)} · Potential €{filteredBets.reduce((s,b)=>s+b.potentialReturn,0).toFixed(0)}
+              {filteredBets.length} bet{filteredBets.length !== 1 ? 's' : ''} · Stake €{filteredBets.filter(b=>!b.parlayId||b.parlayOrder===1).reduce((s,b)=>s+b.amount,0).toFixed(0)} · Potential €{filteredBets.filter(b=>!b.parlayId||b.parlayOrder===1).reduce((s,b)=>s+(b.parlayId?(b.parlayPotential||0):b.potentialReturn),0).toFixed(0)}
             </div>
           </div>
 
@@ -429,8 +437,9 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
 
           {/* GROUP BY MATCH */}
           {betsGroupBy === 'match' && Object.entries(betsByMatch).map(([matchName, bets]) => {
-            const matchStake = bets.reduce((s, b) => s + b.amount, 0)
-            const matchPotential = bets.reduce((s, b) => s + b.potentialReturn, 0)
+            // Only count parlay initial stake once per match (leg 1); skip carry-forward legs
+            const matchStake = bets.filter(b => !b.parlayId || b.parlayOrder === 1).reduce((s, b) => s + b.amount, 0)
+            const matchPotential = bets.filter(b => !b.parlayId || b.parlayOrder === 1).reduce((s, b) => s + (b.parlayId ? (b.parlayPotential || 0) : b.potentialReturn), 0)
             return (
               <div key={matchName} className="rounded-xl mb-4 overflow-hidden" style={{ border: '1px solid var(--surface2)' }}>
                 <div className="flex items-center justify-between px-5 py-3" style={{ background: 'var(--surface2)' }}>
