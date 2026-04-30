@@ -38,6 +38,12 @@ export default function AdminClient({ session, initialSubadmins, initialPlayers,
   const [expandedSA, setExpandedSA] = useState<Set<string>>(new Set())
   const [expandedPlayer, setExpandedPlayer] = useState<Set<string>>(new Set())
   const [betsFilter, setBetsFilter] = useState<'ALL' | 'PENDING' | 'WON' | 'LOST'>('PENDING')
+  const [showBalanceModal, setShowBalanceModal] = useState(false)
+  const [balanceTarget, setBalanceTarget] = useState<{ id: string; name: string; balance: number } | null>(null)
+  const [balanceOp, setBalanceOp] = useState<'add' | 'subtract'>('add')
+  const [balanceAmount, setBalanceAmount] = useState('')
+  const [actionLoading, setActionLoading] = useState(false)
+  const [actionError, setActionError] = useState('')
 
   async function createUser() {
     setCreating(true); setError('')
@@ -62,6 +68,29 @@ export default function AdminClient({ session, initialSubadmins, initialPlayers,
     if (!confirm('Delete this bet?')) return
     await fetch(`/api/bets/${betId}`, { method: 'DELETE' })
     window.location.reload()
+  }
+
+  async function deleteUser(userId: string, name: string) {
+    if (!confirm(`Delete "${name}" and all their data? This cannot be undone.`)) return
+    await fetch(`/api/users/${userId}`, { method: 'DELETE' })
+    window.location.reload()
+  }
+
+  async function adjustBalance() {
+    if (!balanceTarget || !balanceAmount || isNaN(Number(balanceAmount))) return
+    setActionLoading(true); setActionError('')
+    try {
+      const delta = Number(balanceAmount) * (balanceOp === 'subtract' ? -1 : 1)
+      const res = await fetch(`/api/users/${balanceTarget.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ balance: balanceTarget.balance + delta })
+      })
+      if (!res.ok) { const d = await res.json(); setActionError(d.error); return }
+      setShowBalanceModal(false); setBalanceAmount(''); setBalanceTarget(null)
+      window.location.reload()
+    } catch { setActionError('Network error') }
+    finally { setActionLoading(false) }
   }
 
   const statCards = [
@@ -312,7 +341,17 @@ export default function AdminClient({ session, initialSubadmins, initialPlayers,
                     <td className="px-5 py-4 text-white">{sa.children.length}</td>
                     <td className="px-5 py-4"><span className="text-xs px-2 py-1 rounded-full" style={{ background: '#f59e0b20', color: '#f59e0b' }}>{pendingCount} pending</span></td>
                     <td className="px-5 py-4">
-                      <button onClick={() => { setTab('bets'); setExpandedSA(new Set([sa.id])) }} className="text-sm hover:opacity-80 mr-3" style={{ color: 'var(--accent)' }}>Bets →</button>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => { setTab('bets'); setExpandedSA(new Set([sa.id])) }} className="text-sm hover:opacity-80" style={{ color: 'var(--accent)' }}>Bets →</button>
+                        <button onClick={() => { setBalanceTarget({ id: sa.id, name: sa.name, balance: sa.balance }); setBalanceOp('add'); setBalanceAmount(''); setShowBalanceModal(true) }}
+                          className="text-xs px-2 py-1 rounded-lg" style={{ background: '#22c55e15', color: '#22c55e', border: '1px solid #22c55e30' }}>
+                          💰 Balance
+                        </button>
+                        <button onClick={() => deleteUser(sa.id, sa.name)}
+                          className="text-xs px-2 py-1 rounded-lg" style={{ background: '#ef444415', color: '#ef4444', border: '1px solid #ef444430' }}>
+                          🗑 Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 )
@@ -340,13 +379,69 @@ export default function AdminClient({ session, initialSubadmins, initialPlayers,
                   <td className="px-5 py-4" style={{ color: p.balance >= 0 ? '#22c55e' : '#ef4444' }}>€{p.balance.toFixed(2)}</td>
                   <td className="px-5 py-4 text-white">{p.bets.length}</td>
                   <td className="px-5 py-4">
-                    <Link href={`/player/${p.id}`} className="text-sm hover:opacity-80" style={{ color: 'var(--accent)' }}>View →</Link>
+                    <div className="flex items-center gap-2">
+                      <Link href={`/player/${p.id}`} className="text-sm hover:opacity-80" style={{ color: 'var(--accent)' }}>View →</Link>
+                      <button onClick={() => { setBalanceTarget({ id: p.id, name: p.name, balance: p.balance }); setBalanceOp('add'); setBalanceAmount(''); setShowBalanceModal(true) }}
+                        className="text-xs px-2 py-1 rounded-lg" style={{ background: '#22c55e15', color: '#22c55e', border: '1px solid #22c55e30' }}>
+                        💰 Balance
+                      </button>
+                      <button onClick={() => deleteUser(p.id, p.name)}
+                        className="text-xs px-2 py-1 rounded-lg" style={{ background: '#ef444415', color: '#ef4444', border: '1px solid #ef444430' }}>
+                        🗑 Delete
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
               {initialPlayers.length === 0 && <tr><td colSpan={5} className="text-center py-12" style={{ color: 'var(--muted)' }}>No players yet</td></tr>}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Balance Adjustment Modal */}
+      {showBalanceModal && balanceTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)' }}>
+          <div className="w-full max-w-sm rounded-2xl p-6" style={{ background: 'var(--surface)', border: '1px solid var(--surface2)' }}>
+            <h2 className="text-lg font-bold text-white mb-1">Adjust Balance</h2>
+            <p className="text-sm mb-5" style={{ color: 'var(--muted)' }}>
+              {balanceTarget.name} · Current: <span style={{ color: balanceTarget.balance >= 0 ? '#22c55e' : '#ef4444' }}>€{balanceTarget.balance.toFixed(2)}</span>
+            </p>
+            <div className="space-y-4">
+              <div className="flex rounded-xl overflow-hidden" style={{ border: '1px solid var(--surface2)' }}>
+                <button onClick={() => setBalanceOp('add')} className="flex-1 py-2.5 text-sm font-medium transition-all"
+                  style={{ background: balanceOp === 'add' ? '#22c55e' : 'var(--surface2)', color: balanceOp === 'add' ? 'white' : 'var(--muted)' }}>
+                  + Add
+                </button>
+                <button onClick={() => setBalanceOp('subtract')} className="flex-1 py-2.5 text-sm font-medium transition-all"
+                  style={{ background: balanceOp === 'subtract' ? '#ef4444' : 'var(--surface2)', color: balanceOp === 'subtract' ? 'white' : 'var(--muted)' }}>
+                  − Subtract
+                </button>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--muted)' }}>Amount (€)</label>
+                <input type="number" min="0" step="0.01" placeholder="e.g. 100"
+                  value={balanceAmount} onChange={e => setBalanceAmount(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-lg text-white outline-none"
+                  style={{ background: 'var(--surface2)', border: '1px solid #334155' }} />
+              </div>
+              {balanceAmount && !isNaN(Number(balanceAmount)) && (
+                <div className="px-4 py-3 rounded-lg text-sm" style={{ background: 'var(--surface2)' }}>
+                  New balance: <span className="font-bold" style={{ color: (balanceTarget.balance + Number(balanceAmount) * (balanceOp === 'subtract' ? -1 : 1)) >= 0 ? '#22c55e' : '#ef4444' }}>
+                    €{(balanceTarget.balance + Number(balanceAmount) * (balanceOp === 'subtract' ? -1 : 1)).toFixed(2)}
+                  </span>
+                </div>
+              )}
+              {actionError && <p className="text-sm" style={{ color: '#ef4444' }}>{actionError}</p>}
+              <div className="flex gap-3 pt-2">
+                <button onClick={() => { setShowBalanceModal(false); setActionError('') }} className="flex-1 py-2.5 rounded-xl font-medium" style={{ background: 'var(--surface2)', color: 'var(--muted)' }}>Cancel</button>
+                <button onClick={adjustBalance} disabled={actionLoading || !balanceAmount} className="flex-1 py-2.5 rounded-xl font-medium text-white disabled:opacity-50"
+                  style={{ background: balanceOp === 'add' ? '#22c55e' : '#ef4444' }}>
+                  {actionLoading ? 'Saving…' : `${balanceOp === 'add' ? 'Add' : 'Subtract'} €${balanceAmount || '0'}`}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

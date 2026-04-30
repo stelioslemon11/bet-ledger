@@ -101,6 +101,13 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
   const [matchLoading, setMatchLoading] = useState(false)
   const [matchError, setMatchError] = useState('')
   const [selectedDate, setSelectedDate] = useState<'today' | 'tomorrow'>('today')
+  const [selectedSport, setSelectedSport] = useState<'football' | 'basketball'>('football')
+
+  // Balance adjustment modal
+  const [showBalanceModal, setShowBalanceModal] = useState(false)
+  const [balanceTarget, setBalanceTarget] = useState<{ id: string; name: string; balance: number } | null>(null)
+  const [balanceAmount, setBalanceAmount] = useState('')
+  const [balanceNote, setBalanceNote] = useState<'add' | 'subtract'>('add')
 
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -163,13 +170,12 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
     .reduce((s, b) => s + (b.parlayId ? (b.parlayPotential || 0) : b.potentialReturn), 0)
 
   // Match browser
-  const fetchMatches = useCallback(async () => {
+  const fetchMatches = useCallback(async (sport: 'football' | 'basketball' = 'football') => {
     setMatchLoading(true); setMatchError('')
     try {
-      const res = await fetch('/api/matches')
+      const res = await fetch(`/api/matches?sport=${sport}`)
       const data = await res.json()
       if (!res.ok || data.error) { setMatchError(data.error || 'Failed'); return }
-      // Merge live + upcoming, live first
       const live = (data.live || []) as Match[]
       const upcoming = (data.matches || []) as Match[]
       setMatches([...live, ...upcoming])
@@ -180,7 +186,7 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
   function openMatchBrowser(legIdx: number | null) {
     setBrowseForLeg(legIdx)
     setShowMatchBrowser(true)
-    if (matches.length === 0) fetchMatches()
+    if (matches.length === 0) fetchMatches(selectedSport)
   }
 
   function getToday() { return new Date().toISOString().split('T')[0] }
@@ -287,6 +293,31 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
     finally { setLoading(false) }
   }
 
+  async function deletePlayer(playerId: string, playerName: string) {
+    if (!confirm(`Delete player "${playerName}" and all their bets? This cannot be undone.`)) return
+    await fetch(`/api/users/${playerId}`, { method: 'DELETE' })
+    window.location.reload()
+  }
+
+  async function adjustBalance() {
+    if (!balanceTarget || !balanceAmount || isNaN(Number(balanceAmount))) return
+    setLoading(true); setError('')
+    try {
+      const delta = Number(balanceAmount) * (balanceNote === 'subtract' ? -1 : 1)
+      const newBalance = balanceTarget.balance + delta
+      const res = await fetch(`/api/users/${balanceTarget.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ balance: newBalance })
+      })
+      if (!res.ok) { const d = await res.json(); setError(d.error); return }
+      setShowBalanceModal(false)
+      setBalanceAmount(''); setBalanceTarget(null)
+      window.location.reload()
+    } catch { setError('Network error') }
+    finally { setLoading(false) }
+  }
+
   async function settleBetAction(betId: string, status: 'WON' | 'LOST') {
     await fetch(`/api/bets/${betId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) })
     window.location.reload()
@@ -377,7 +408,7 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
                   <span style={{ color: '#22c55e' }}>✅ {won.length} won</span>
                   <span style={{ color: '#ef4444' }}>❌ {lost.length} lost</span>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                   <button onClick={() => { setBetTargetId(player.id); setBetMode('single'); setShowAddBet(true) }}
                     className="flex-1 py-2 rounded-lg text-xs font-medium text-white" style={{ background: 'var(--accent)' }}>
                     + Single Bet
@@ -389,6 +420,16 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
                   <Link href={`/player/${player.id}`} className="px-3 py-2 rounded-lg text-xs font-medium text-center" style={{ background: 'var(--surface2)', color: 'var(--muted)' }}>
                     View
                   </Link>
+                </div>
+                <div className="flex gap-2 mt-2">
+                  <button onClick={() => { setBalanceTarget({ id: player.id, name: player.name, balance: player.balance }); setBalanceNote('add'); setBalanceAmount(''); setShowBalanceModal(true) }}
+                    className="flex-1 py-1.5 rounded-lg text-xs font-medium" style={{ background: '#22c55e15', color: '#22c55e', border: '1px solid #22c55e30' }}>
+                    💰 Adjust Balance
+                  </button>
+                  <button onClick={() => deletePlayer(player.id, player.name)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium" style={{ background: '#ef444415', color: '#ef4444', border: '1px solid #ef444430' }}>
+                    🗑 Delete
+                  </button>
                 </div>
               </div>
             )
@@ -612,7 +653,18 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
               <h3 className="font-bold text-white">Browse Matches {browseForLeg !== null ? `(Leg ${browseForLeg + 1})` : ''}</h3>
               <button onClick={() => setShowMatchBrowser(false)} style={{ color: 'var(--muted)' }} className="text-xl leading-none">×</button>
             </div>
-            <div className="px-5 py-3 flex gap-2" style={{ borderBottom: '1px solid var(--surface2)' }}>
+            <div className="px-5 py-3 flex gap-2 flex-wrap" style={{ borderBottom: '1px solid var(--surface2)' }}>
+              {/* Sport toggle */}
+              <div className="flex gap-1 rounded-lg p-1" style={{ background: 'var(--surface2)' }}>
+                {([['football','⚽ Football'],['basketball','🏀 Basketball']] as const).map(([s, label]) => (
+                  <button key={s} onClick={() => { setSelectedSport(s); setMatches([]); fetchMatches(s) }}
+                    className="px-3 py-1.5 rounded-md text-xs font-medium transition-all"
+                    style={{ background: selectedSport === s ? 'var(--accent)' : 'transparent', color: selectedSport === s ? 'white' : 'var(--muted)' }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {/* Date toggle (only for upcoming) */}
               <div className="flex gap-1 rounded-lg p-1" style={{ background: 'var(--surface2)' }}>
                 {(['today','tomorrow'] as const).map(d => (
                   <button key={d} onClick={() => setSelectedDate(d)} className="px-3 py-1.5 rounded-md text-xs font-medium capitalize transition-all"
@@ -623,7 +675,7 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
               </div>
               <input placeholder="Search team or league…" value={matchSearch} onChange={e => setMatchSearch(e.target.value)}
                 className="flex-1 px-3 py-1.5 rounded-lg text-sm text-white outline-none" style={{ background: 'var(--surface2)', border: '1px solid #334155' }} />
-              <button onClick={fetchMatches} className="px-3 py-1.5 rounded-lg text-xs" style={{ background: 'var(--surface2)', color: 'var(--muted)' }}>↻ Refresh</button>
+              <button onClick={() => fetchMatches(selectedSport)} className="px-3 py-1.5 rounded-lg text-xs" style={{ background: 'var(--surface2)', color: 'var(--muted)' }}>↻ Refresh</button>
             </div>
             <div className="overflow-y-auto flex-1 px-5 py-3">
               {matchLoading && <p className="text-center py-8" style={{ color: 'var(--muted)' }}>Loading matches…</p>}
@@ -829,6 +881,53 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
                 style={{ background: betMode === 'parlay' ? '#f59e0b' : 'var(--accent)' }}>
                 {loading ? 'Saving…' : betMode === 'parlay' ? `Create Parlay (${parlayLegs.length} legs)` : 'Create Bet'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── BALANCE ADJUSTMENT MODAL ── */}
+      {showBalanceModal && balanceTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)' }}>
+          <div className="w-full max-w-sm rounded-2xl p-6" style={{ background: 'var(--surface)', border: '1px solid var(--surface2)' }}>
+            <h2 className="text-lg font-bold text-white mb-1">Adjust Balance</h2>
+            <p className="text-sm mb-5" style={{ color: 'var(--muted)' }}>
+              {balanceTarget.name} · Current: <span style={{ color: balanceTarget.balance >= 0 ? '#22c55e' : '#ef4444' }}>€{balanceTarget.balance.toFixed(2)}</span>
+            </p>
+            <div className="space-y-4">
+              {/* Add / Subtract toggle */}
+              <div className="flex rounded-xl overflow-hidden" style={{ border: '1px solid var(--surface2)' }}>
+                <button onClick={() => setBalanceNote('add')} className="flex-1 py-2.5 text-sm font-medium transition-all"
+                  style={{ background: balanceNote === 'add' ? '#22c55e' : 'var(--surface2)', color: balanceNote === 'add' ? 'white' : 'var(--muted)' }}>
+                  + Add
+                </button>
+                <button onClick={() => setBalanceNote('subtract')} className="flex-1 py-2.5 text-sm font-medium transition-all"
+                  style={{ background: balanceNote === 'subtract' ? '#ef4444' : 'var(--surface2)', color: balanceNote === 'subtract' ? 'white' : 'var(--muted)' }}>
+                  − Subtract
+                </button>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--muted)' }}>Amount (€)</label>
+                <input type="number" min="0" step="0.01" placeholder="e.g. 50"
+                  value={balanceAmount} onChange={e => setBalanceAmount(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-lg text-white outline-none"
+                  style={{ background: 'var(--surface2)', border: '1px solid #334155' }} />
+              </div>
+              {balanceAmount && !isNaN(Number(balanceAmount)) && (
+                <div className="px-4 py-3 rounded-lg text-sm" style={{ background: 'var(--surface2)' }}>
+                  New balance: <span className="font-bold" style={{ color: (balanceTarget.balance + Number(balanceAmount) * (balanceNote === 'subtract' ? -1 : 1)) >= 0 ? '#22c55e' : '#ef4444' }}>
+                    €{(balanceTarget.balance + Number(balanceAmount) * (balanceNote === 'subtract' ? -1 : 1)).toFixed(2)}
+                  </span>
+                </div>
+              )}
+              {error && <p className="text-sm" style={{ color: '#ef4444' }}>{error}</p>}
+              <div className="flex gap-3 pt-2">
+                <button onClick={() => { setShowBalanceModal(false); setError('') }} className="flex-1 py-2.5 rounded-xl font-medium" style={{ background: 'var(--surface2)', color: 'var(--muted)' }}>Cancel</button>
+                <button onClick={adjustBalance} disabled={loading || !balanceAmount} className="flex-1 py-2.5 rounded-xl font-medium text-white disabled:opacity-50"
+                  style={{ background: balanceNote === 'add' ? '#22c55e' : '#ef4444' }}>
+                  {loading ? 'Saving…' : `${balanceNote === 'add' ? 'Add' : 'Subtract'} €${balanceAmount || '0'}`}
+                </button>
+              </div>
             </div>
           </div>
         </div>
