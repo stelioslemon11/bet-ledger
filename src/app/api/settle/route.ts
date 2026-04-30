@@ -25,7 +25,7 @@ export async function POST() {
       return NextResponse.json({ message: 'No pending bets with fixture IDs' })
     }
 
-    const fixtureIds = [...new Set(pendingBets.map(b => b.fixtureId).filter(Boolean))]
+    const fixtureIds = Array.from(new Set(pendingBets.map(b => b.fixtureId).filter(Boolean) as number[]))
     const idsParam = fixtureIds.join('-')
 
     const res = await fetch(`${BASE_URL}/fixtures?ids=${idsParam}`, {
