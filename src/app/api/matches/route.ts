@@ -93,11 +93,15 @@ async function apiFetch(url: string) {
 // ── FOOTBALL ──────────────────────────────────────────────
 async function fetchFootballUpcoming(): Promise<Match[]> {
   if (cache.football.upcoming && Date.now() - cache.football.upcoming.ts < UPCOMING_TTL) return cache.football.upcoming.data
+  const FINISHED = new Set(['FT', 'AET', 'PEN', 'AWD', 'WO', 'CANC', 'PST', 'ABD'])
   const all: Match[] = []
   for (const offset of [0, 1]) {
     const json = await apiFetch(`${FOOTBALL_URL}/fixtures?date=${getDateString(offset)}`)
     for (const f of json?.response || []) {
-      if (FOOTBALL_UPCOMING.has(f.fixture.status.short)) all.push(toFootballMatch(f, false))
+      const s = f.fixture.status.short
+      if (FINISHED.has(s)) continue // skip fully finished/cancelled
+      const isLive = FOOTBALL_LIVE.has(s)
+      all.push(toFootballMatch(f, isLive))
     }
   }
   all.sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`))
@@ -117,11 +121,15 @@ async function fetchFootballLive(): Promise<Match[]> {
 // ── BASKETBALL ────────────────────────────────────────────
 async function fetchBasketballUpcoming(): Promise<Match[]> {
   if (cache.basketball.upcoming && Date.now() - cache.basketball.upcoming.ts < UPCOMING_TTL) return cache.basketball.upcoming.data
+  const BASK_FINISHED = new Set(['FT', 'AOT', 'POST', 'CANC'])
   const all: Match[] = []
   for (const offset of [0, 1]) {
     const json = await apiFetch(`${BASKETBALL_URL}/games?date=${getDateString(offset)}`)
     for (const g of json?.response || []) {
-      if (BASKETBALL_UPCOMING.has(g.status?.short || '')) all.push(toBasketballMatch(g, false))
+      const s = g.status?.short || ''
+      if (BASK_FINISHED.has(s)) continue
+      const isLive = BASKETBALL_LIVE.has(s)
+      all.push(toBasketballMatch(g, isLive))
     }
   }
   all.sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`))
@@ -150,7 +158,12 @@ export async function GET(req: Request) {
     const [upcoming, live] = sport === 'basketball'
       ? await Promise.all([fetchBasketballUpcoming(), fetchBasketballLive()])
       : await Promise.all([fetchFootballUpcoming(), fetchFootballLive()])
-    return NextResponse.json({ matches: upcoming, live, sport })
+    // Merge: upcoming now includes in-progress matches with isLive flag
+    // live endpoint gives us fresh scores for currently live matches
+    const liveIds = new Set(live.map(m => m.id))
+    const merged = upcoming.map(m => liveIds.has(m.id) ? { ...m, isLive: true } : m)
+    const extraLive = live.filter(m => !merged.find(u => u.id === m.id))
+    return NextResponse.json({ matches: [...merged, ...extraLive], live, sport })
   } catch (err) {
     const c = cache[sport]
     if (c.upcoming?.data.length || c.live?.data.length) {
