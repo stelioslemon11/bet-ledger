@@ -464,9 +464,17 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
             const won = player.bets.filter(b => b.status === 'WON')
             const lost = player.bets.filter(b => b.status === 'LOST')
             // Available = total balance minus pending stakes (parlay counts only leg 1)
-            const pendingStake = pending
-              .filter(b => !b.parlayId || b.parlayOrder === 1)
-              .reduce((s, b) => s + b.amount, 0)
+            // Lock initial stake for entire parlay duration (even when leg 1 already won)
+            const pendingParlayIds = new Set(pending.filter(b => b.parlayId).map(b => b.parlayId))
+            const seenParlays = new Set<string>()
+            let parlayLocked = 0
+            player.bets.forEach(b => {
+              if (b.parlayId && pendingParlayIds.has(b.parlayId!) && !seenParlays.has(b.parlayId!)) {
+                parlayLocked += b.parlayInitialStake || 0
+                seenParlays.add(b.parlayId!)
+              }
+            })
+            const pendingStake = pending.filter(b => !b.parlayId).reduce((s, b) => s + b.amount, 0) + parlayLocked
             const availableBalance = player.balance - pendingStake
             return (
               <div key={player.id} className="rounded-xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--surface2)' }}>
@@ -617,7 +625,7 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
                     if (!lineMap[line]) lineMap[line] = {}
                     if (!lineMap[line][b.betType]) lineMap[line][b.betType] = { stake: 0, potential: 0, players: new Set() }
                     // Include all bets; for parlay legs use only this leg's stake/potential
-                    const legStake = b.parlayId ? (b.parlayOrder === 1 ? (b.parlayInitialStake || b.amount) : 0) : b.amount
+                    const legStake = b.parlayId ? (b.parlayOrder === 1 ? (b.parlayInitialStake || b.amount) : b.amount) : b.amount
                     const legPotential = b.potentialReturn  // this leg's payout at its own odds only
                     lineMap[line][b.betType].stake += legStake
                     lineMap[line][b.betType].potential += legPotential

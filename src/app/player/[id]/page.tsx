@@ -13,7 +13,7 @@ export default async function PlayerPage({ params }: { params: { id: string } })
 
   const user = await prisma.user.findUnique({
     where: { id: params.id },
-    include: { bets: { orderBy: { createdAt: 'desc' } } }
+    include: { bets: { orderBy: { createdAt: 'desc' }, include: { parlay: { select: { initialStake: true } } } } }
   })
   if (!user) redirect('/dashboard')
 

@@ -14,10 +14,20 @@ export default function PlayerClient({ user, session }: { user: User; session: S
 
   const filtered = user.bets.filter(b => filter === 'ALL' || b.status === filter)
 
-  const pendingBets = user.bets.filter(b => b.status === 'PENDING')
-  const wonBets = user.bets.filter(b => b.status === 'WON')
-  const lostBets = user.bets.filter(b => b.status === 'LOST')
-  const totalStake = pendingBets.reduce((s, b) => s + b.amount, 0)
+  const pendingBets = user.bets.filter((b: any) => b.status === 'PENDING')
+  const wonBets = user.bets.filter((b: any) => b.status === 'WON')
+  const lostBets = user.bets.filter((b: any) => b.status === 'LOST')
+  // Locked stake: single pending bets + one initial stake per parlay that has any pending leg
+  const pendingParlayIds = new Set(pendingBets.filter((b: any) => b.parlayId).map((b: any) => b.parlayId))
+  const seenParlays = new Set<string>()
+  let totalStake = 0
+  pendingBets.filter((b: any) => !b.parlayId).forEach((b: any) => { totalStake += b.amount })
+  user.bets.forEach((b: any) => {
+    if (b.parlayId && pendingParlayIds.has(b.parlayId) && !seenParlays.has(b.parlayId)) {
+      totalStake += b.parlay?.initialStake || b.amount
+      seenParlays.add(b.parlayId)
+    }
+  })
   const availableBalance = user.balance - totalStake
   const totalPotential = pendingBets.reduce((s, b) => s + b.potentialReturn, 0)
   const totalWon = wonBets.reduce((s, b) => s + b.potentialReturn, 0)

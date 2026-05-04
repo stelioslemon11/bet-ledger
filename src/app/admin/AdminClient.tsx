@@ -373,9 +373,21 @@ export default function AdminClient({ session, initialSubadmins, initialPlayers,
             </thead>
             <tbody style={{ background: 'var(--surface)' }}>
               {initialPlayers.map((p, i) => {
+                // Lock initial stake for entire parlay duration
+                const pendingParlayIds = new Set(
+                  p.bets.filter((b: any) => b.status === 'PENDING' && b.parlayId).map((b: any) => b.parlayId)
+                )
+                const seenParlays = new Set<string>()
+                let parlayLocked = 0
+                p.bets.forEach((b: any) => {
+                  if (b.parlayId && pendingParlayIds.has(b.parlayId) && !seenParlays.has(b.parlayId)) {
+                    parlayLocked += b.parlayInitialStake || 0
+                    seenParlays.add(b.parlayId)
+                  }
+                })
                 const pendingStake = p.bets
-                  .filter((b: any) => b.status === 'PENDING' && (!b.parlayId || b.parlayOrder === 1))
-                  .reduce((s: number, b: any) => s + b.amount, 0)
+                  .filter((b: any) => b.status === 'PENDING' && !b.parlayId)
+                  .reduce((s: number, b: any) => s + b.amount, 0) + parlayLocked
                 const available = p.balance - pendingStake
                 return (
                 <tr key={p.id} style={{ borderTop: i > 0 ? '1px solid var(--surface2)' : undefined }}>
