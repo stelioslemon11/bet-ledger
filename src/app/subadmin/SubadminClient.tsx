@@ -188,9 +188,10 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
       const res = await fetch(`/api/matches?sport=${sport}`)
       const data = await res.json()
       if (!res.ok || data.error) { setMatchError(data.error || 'Failed'); return }
-      const live = (data.live || []) as Match[]
-      const upcoming = (data.matches || []) as Match[]
-      setMatches([...live, ...upcoming])
+      // data.matches contains all non-finished matches (NS + in-progress) with correct isLive flag
+      // data.live is the live-only endpoint — matches is the superset, use it alone to avoid duplicates
+      const allMatches = (data.matches || []) as Match[]
+      setMatches(allMatches)
     } catch { setMatchError('Network error') }
     finally { setMatchLoading(false) }
   }, [])
@@ -615,11 +616,11 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
                     const line = getBetLine(b.betType)
                     if (!lineMap[line]) lineMap[line] = {}
                     if (!lineMap[line][b.betType]) lineMap[line][b.betType] = { stake: 0, potential: 0, players: new Set() }
-                    const isInitial = !b.parlayId || b.parlayOrder === 1
-                    if (isInitial) {
-                      lineMap[line][b.betType].stake += b.amount
-                      lineMap[line][b.betType].potential += b.parlayId ? (b.parlayPotential || 0) : b.potentialReturn
-                    }
+                    // Include all bets; for parlay legs use only this leg's stake/potential
+                    const legStake = b.parlayId ? (b.parlayOrder === 1 ? (b.parlayInitialStake || b.amount) : 0) : b.amount
+                    const legPotential = b.potentialReturn  // this leg's payout at its own odds only
+                    lineMap[line][b.betType].stake += legStake
+                    lineMap[line][b.betType].potential += legPotential
                     lineMap[line][b.betType].players.add(b.playerName)
                   })
                   const lines = Object.entries(lineMap).filter(([, sides]) => Object.keys(sides).length > 1)
