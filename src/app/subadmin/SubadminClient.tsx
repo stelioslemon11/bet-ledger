@@ -109,6 +109,11 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
   const [editForm, setEditForm] = useState({ match: '', betType: 'Over 2.5', amount: '', odds: '', notes: '', fixtureId: null as number | null, fixtureDate: null as string | null })
   const [settleLog, setSettleLog] = useState<string[]>([])
   const [settleRunning, setSettleRunning] = useState(false)
+  // AI Chat state
+  const [showAI, setShowAI] = useState(false)
+  const [aiMessages, setAiMessages] = useState<{ role: 'user'|'assistant'; content: string }[]>([])
+  const [aiInput, setAiInput] = useState('')
+  const [aiLoading, setAiLoading] = useState(false)
 
   // Balance adjustment modal
   const [showBalanceModal, setShowBalanceModal] = useState(false)
@@ -379,6 +384,33 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
     window.location.reload()
   }
 
+  async function sendAiMessage() {
+    if (!aiInput.trim() || aiLoading) return
+    const userMsg = { role: 'user' as const, content: aiInput.trim() }
+    const updated = [...aiMessages, userMsg]
+    setAiMessages(updated)
+    setAiInput('')
+    setAiLoading(true)
+    try {
+      const res = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: updated, subadminId: session.id }),
+      })
+      const data = await res.json()
+      if (data.error) {
+        setAiMessages(m => [...m, { role: 'assistant', content: '⚠️ ' + data.error }])
+      } else {
+        setAiMessages(m => [...m, { role: 'assistant', content: data.reply }])
+        if (data.betPlaced) setTimeout(() => window.location.reload(), 1500)
+      }
+    } catch {
+      setAiMessages(m => [...m, { role: 'assistant', content: '⚠️ Network error' }])
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
   const targetPlayerName = players.find(p => p.id === betTargetId)?.name || ''
 
   return (
@@ -575,6 +607,55 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
                     <span style={{ color: 'var(--muted)' }}>{bets.length} bet{bets.length > 1 ? 's' : ''}</span>
                   </div>
                 </div>
+                {/* ── Exposure analysis ── */}
+                {(() => {
+                  // Build per-line, per-side exposure
+                  const lineMap: Record<string, Record<string, { stake: number; potential: number; players: Set<string> }>> = {}
+                  bets.forEach(b => {
+                    const line = getBetLine(b.betType)
+                    if (!lineMap[line]) lineMap[line] = {}
+                    if (!lineMap[line][b.betType]) lineMap[line][b.betType] = { stake: 0, potential: 0, players: new Set() }
+                    const isInitial = !b.parlayId || b.parlayOrder === 1
+                    if (isInitial) {
+                      lineMap[line][b.betType].stake += b.amount
+                      lineMap[line][b.betType].potential += b.parlayId ? (b.parlayPotential || 0) : b.potentialReturn
+                    }
+                    lineMap[line][b.betType].players.add(b.playerName)
+                  })
+                  const lines = Object.entries(lineMap).filter(([, sides]) => Object.keys(sides).length > 1)
+                  if (lines.length === 0) return null
+                  return (
+                    <div className="px-5 py-2" style={{ background: '#0a1628', borderBottom: '1px solid var(--surface2)' }}>
+                      {lines.map(([line, sides]) => {
+                        const sideEntries = Object.entries(sides)
+                        const maxPotential = Math.max(...sideEntries.map(([, s]) => s.potential))
+                        return (
+                          <div key={line} className="mb-1.5 last:mb-0">
+                            <div className="flex items-center gap-1 mb-1">
+                              <span className="text-xs font-semibold" style={{ color: '#64748b' }}>{line}</span>
+                              <span className="text-xs" style={{ color: '#334155' }}>· house exposure</span>
+                            </div>
+                            <div className="flex gap-2 flex-wrap">
+                              {sideEntries.map(([betType, s]) => {
+                                const isRisk = s.potential === maxPotential
+                                return (
+                                  <div key={betType} className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs"
+                                    style={{ background: isRisk ? '#ef444410' : '#22c55e10', border: `1px solid ${isRisk ? '#ef444430' : '#22c55e30'}` }}>
+                                    <span className="font-semibold" style={{ color: isRisk ? '#f87171' : '#4ade80' }}>{betType}</span>
+                                    <span style={{ color: '#94a3b8' }}>{s.players.size} player{s.players.size !== 1 ? 's' : ''}</span>
+                                    <span style={{ color: '#64748b' }}>€{s.stake.toFixed(0)} in</span>
+                                    <span style={{ color: isRisk ? '#f87171' : '#4ade80' }}>→ €{s.potential.toFixed(0)}</span>
+                                    {isRisk && <span className="font-bold" style={{ color: '#f87171' }}>⚠️ max risk</span>}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                })()}
                 <div style={{ background: 'var(--surface)' }}>
                   {(() => {
                     // Group bets within this match by their bet line
@@ -1077,6 +1158,90 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
           </div>
         </div>
       )}
+
+      {/* ── AI CHAT FLOATING BUTTON + PANEL ── */}
+      <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
+        {showAI && (
+          <div className="w-96 rounded-2xl overflow-hidden shadow-2xl flex flex-col" style={{ background: 'var(--surface)', border: '1px solid var(--surface2)', height: '480px' }}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-3" style={{ background: 'var(--surface2)', borderBottom: '1px solid #1e293b' }}>
+              <div className="flex items-center gap-2">
+                <span className="text-lg">🤖</span>
+                <span className="font-semibold text-white text-sm">AI Assistant</span>
+                <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#6366f120', color: '#818cf8' }}>Claude</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setAiMessages([])} className="text-xs px-2 py-1 rounded-lg" style={{ color: 'var(--muted)' }} title="Clear chat">🗑</button>
+                <button onClick={() => setShowAI(false)} style={{ color: 'var(--muted)' }}>✕</button>
+              </div>
+            </div>
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 text-sm">
+              {aiMessages.length === 0 && (
+                <div className="text-center py-8" style={{ color: 'var(--muted)' }}>
+                  <p className="mb-3">Ask me anything about your players or bets.</p>
+                  <div className="space-y-2">
+                    {[
+                      'Who has the lowest balance?',
+                      'How much is at risk tonight?',
+                      'Place €50 on Barcelona Over 2.5 for Nikos',
+                    ].map(hint => (
+                      <button key={hint} onClick={() => setAiInput(hint)}
+                        className="block w-full text-left px-3 py-2 rounded-lg text-xs transition-opacity hover:opacity-80"
+                        style={{ background: 'var(--surface2)', color: '#94a3b8' }}>
+                        {hint}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {aiMessages.map((m, i) => (
+                <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className="max-w-[85%] px-3 py-2 rounded-xl text-xs whitespace-pre-wrap"
+                    style={{
+                      background: m.role === 'user' ? 'var(--accent)' : 'var(--surface2)',
+                      color: m.role === 'user' ? 'white' : '#e2e8f0',
+                    }}>
+                    {m.content}
+                  </div>
+                </div>
+              ))}
+              {aiLoading && (
+                <div className="flex justify-start">
+                  <div className="px-3 py-2 rounded-xl text-xs" style={{ background: 'var(--surface2)', color: 'var(--muted)' }}>
+                    ⏳ Thinking…
+                  </div>
+                </div>
+              )}
+            </div>
+            {/* Input */}
+            <div className="px-4 py-3 flex gap-2" style={{ borderTop: '1px solid var(--surface2)' }}>
+              <input
+                type="text"
+                value={aiInput}
+                onChange={e => setAiInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendAiMessage()}
+                placeholder="Ask or place a bet…"
+                disabled={aiLoading}
+                className="flex-1 px-3 py-2 rounded-xl text-xs text-white outline-none disabled:opacity-50"
+                style={{ background: 'var(--surface2)', border: '1px solid #334155' }}
+              />
+              <button onClick={sendAiMessage} disabled={aiLoading || !aiInput.trim()}
+                className="px-3 py-2 rounded-xl text-xs font-medium text-white disabled:opacity-50"
+                style={{ background: 'var(--accent)' }}>
+                ➤
+              </button>
+            </div>
+          </div>
+        )}
+        {/* Toggle button */}
+        <button onClick={() => setShowAI(v => !v)}
+          className="w-14 h-14 rounded-full flex items-center justify-center text-2xl shadow-lg hover:opacity-90 transition-all"
+          style={{ background: showAI ? '#334155' : 'var(--accent)', border: '2px solid var(--surface2)' }}
+          title="AI Assistant">
+          {showAI ? '✕' : '🤖'}
+        </button>
+      </div>
 
       {/* ── CREATE PLAYER MODAL ── */}
       {showCreatePlayer && (
