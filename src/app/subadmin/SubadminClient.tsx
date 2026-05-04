@@ -395,7 +395,7 @@ export default function SubadminClient({ session, initialPlayers }: { session: S
       const res = await fetch('/api/ai', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: updated, subadminId: session.id }),
+        body: JSON.stringify({ messages: updated, subadminId: session.userId }),
       })
       const data = await res.json()
       if (data.error) {
